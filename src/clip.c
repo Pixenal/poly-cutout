@@ -46,10 +46,30 @@ typedef struct FaceRoot {
 } FaceRoot;
 
 static
-void cornerListInit(
+void cornerListInitClip(
 	LinAlloc *pAlloc,
 	const void *pUserData,
-	const Mesh *pMesh, const FaceRange *pFace,
+	const void *pMesh, const FaceRange *pFace,
+	V2_F32 (* getPos)(const void *, const Mesh *, const FaceRange *, I32),
+	Corner **ppRoot,
+	Face face
+) {
+	stucLinAlloc(pAlloc, ppRoot, pFace->size);
+	for (I32 i = 0; i < pFace->size; ++i) {
+		Corner *pCorner = (*ppRoot) + i;
+		I32 iNext = (i + 1) % pFace->size;
+		pCorner->pNext = (*ppRoot) + iNext;
+		pCorner->face = face;
+		V2_F32 pos = getPos(pUserData, pMesh, pFace, i);
+		pCorner->pos = (V3_F32) {.d = {pos.d[0], pos.d[1], .0f}};
+	}
+}
+
+static
+void cornerListInitSubj(
+	LinAlloc *pAlloc,
+	const void *pUserData,
+	const void *pMesh, const FaceRange *pFace,
 	V3_F32 (* getPos)(const void *, const Mesh *, const FaceRange *, I32),
 	Corner **ppRoot,
 	Face face
@@ -525,10 +545,14 @@ Result getFirstClipEntry(FaceRoot *pSubjRoot, Corner **ppStart) {
 }
 
 static
+void addCorner() {
+}
+
+static
 Result makeClippedFaces(FaceRoot *pSubjRoot, ClipFaceArr *pOut) {
 	Result err = STUC_SUCCESS;
 	Corner *pStart = NULL;
-	err = getFirstEntry(pSubjRoot, pStart);
+	err = getFirstClipEntry(pSubjRoot, &pStart);
 	STUC_RETURN_ERR_IFNOT(err, "");
 	if (!pStart) {
 		//handle no start entry (throwing err for now)
@@ -561,10 +585,10 @@ Result makeClippedFaces(FaceRoot *pSubjRoot, ClipFaceArr *pOut) {
 Result stucClip(
 	const StucAlloc *pAlloc,
 	const void *pUserData,
-	const Mesh *pClipMesh, const FaceRange *pClip,
-	V3_F32 (* clipGetPos)(const void *, const Mesh *, const FaceRange *, I32),
-	const Mesh *pSubjMesh, const FaceRange *pSubj,
-	V3_F32 (* subjGetPos)(const void *, const Mesh *, const FaceRange *, I32),
+	const void *pClipMesh, const FaceRange *pClip,
+	V2_F32 (* clipGetPos)(const void *, const void *, const FaceRange *, I32),
+	const void *pSubjMesh, const FaceRange *pSubj,
+	V3_F32 (* subjGetPos)(const void *, const void *, const FaceRange *, I32),
 	ClipFaceArr *pOut
 ) {
 	//subject abbreviated to subj
@@ -576,13 +600,13 @@ Result stucClip(
 	}
 	FaceRoot clipRoot = {.size = pClip->size};
 	FaceRoot subjRoot = {.size = pSubj->size};
-	cornerListInit(
+	cornerListInitClip(
 		&cornerAlloc, pUserData,
 		pClipMesh, pClip, clipGetPos,
 		&clipRoot.pRoot,
 		FACE_CLIP
 	);
-	cornerListInit(
+	cornerListInitSubj(
 		&cornerAlloc,
 		pUserData,
 		pSubjMesh, pSubj, subjGetPos,

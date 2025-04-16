@@ -42,6 +42,7 @@ typedef union ClipInfo {
 
 typedef struct ClipCorner {
 	struct ClipCorner *pNext;
+	V3_F32 pos;
 	ClipCornerType type;
 	ClipInfo info;
 } ClipCorner;
@@ -61,10 +62,10 @@ typedef struct ClipFaceArr {
 Result stucClip(
 	const StucAlloc *pAlloc,
 	const void *pUserData,
-	const Mesh *pClipMesh, const FaceRange *pClip,
-	V3_F32 (* clipGetPos)(const void *, const Mesh *, const FaceRange *, I32),
-	const Mesh *pSubjMesh, const FaceRange *pSubj,
-	V3_F32 (* subjGetPos)(const void *, const Mesh *, const FaceRange *, I32),
+	const void *pClipMesh, const FaceRange *pClip,
+	V2_F32 (* clipGetPos)(const void *, const void *, const FaceRange *, I32),
+	const void *pSubjMesh, const FaceRange *pSubj,
+	V3_F32 (* subjGetPos)(const void *, const void *, const FaceRange *, I32),
 	ClipFaceArr *pOut
 );
 
