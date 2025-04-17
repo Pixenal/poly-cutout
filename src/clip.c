@@ -440,6 +440,11 @@ Result labelCrossOrBounce(FaceRoot *pSubjRoot) {
 		Corner *pStart;
 	} OverlapChain;
 	OverlapChain chain = {0};
+	Corner *pStart = pSubjRoot->pRoot;
+	if (pStart->label == LABEL_ON_LEFT || pStart->label == LABEL_ON_RIGHT) {
+		pStart = pStart->pNext;
+	}
+	pSubj = pStart;
 	i = 0;
 	do {
 		STUC_RETURN_ERR_IFNOT_COND(err, i < pSubjRoot->size, "infinite or astray loop");
@@ -463,7 +468,7 @@ Result labelCrossOrBounce(FaceRoot *pSubjRoot) {
 			setLinkLabel(chain.pStart, LABEL_BOUNCE_DELAYED);
 			chain.pStart = NULL;
 		}
-	} while(++i, pSubj = pSubj->pNext, pSubj != pSubjRoot->pRoot);
+	} while(++i, pSubj = pSubj->pNext, pSubj != pStart);
 	return err;
 }
 
