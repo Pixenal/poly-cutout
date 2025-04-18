@@ -59,13 +59,18 @@ typedef struct ClipFaceArr {
 	I32 count;
 } ClipFaceArr;
 
+typedef struct ClipInput {
+	I32 *pSizes;
+	I32 boundaries;
+} ClipInput;
+
 Result stucClip(
 	const StucAlloc *pAlloc,
 	const void *pUserData,
-	const void *pClipMesh, const FaceRange *pClip,
-	V2_F32 (* clipGetPos)(const void *, const void *, const FaceRange *, I32),
-	const void *pSubjMesh, const FaceRange *pSubj,
-	V3_F32 (* subjGetPos)(const void *, const void *, const FaceRange *, I32),
+	const void *pClipMesh, ClipInput clipInput,
+	V2_F32 (* clipGetPos)(const void *, const void *, I32, I32),
+	const void *pSubjMesh, ClipInput subjInput,
+	V3_F32 (* subjGetPos)(const void *, const void *, I32, I32),
 	ClipFaceArr *pOut
 );
 
