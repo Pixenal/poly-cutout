@@ -42,6 +42,7 @@ typedef union ClipInfo {
 
 typedef struct ClipCorner {
 	struct ClipCorner *pNext;
+	struct ClipCorner *pPrev;
 	V3_F32 pos;
 	ClipCornerType type;
 	ClipInfo info;

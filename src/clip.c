@@ -8,6 +8,7 @@ typedef enum Label {
 	LABEL_NONE,
 	LABEL_CROSS,
 	LABEL_CROSS_DELAYED,
+	LABEL_CROSS_CANDIDATE,
 	LABEL_BOUNCE,
 	LABEL_BOUNCE_DELAYED,
 	LABEL_LEFT_ON,
@@ -43,6 +44,7 @@ typedef struct Corner {
 	ClipOrSubj face;
 	bool checked;
 	bool original;
+	bool cross;
 } Corner;
 
 typedef struct Funcs {
@@ -152,12 +154,17 @@ Result faceIterInternFindValidStart(FaceIter *pIter) {
 }
 
 static
-bool faceIterAtEnd(FaceIter *pIter) {
-	if (pIter->err != STUC_SUCCESS ||
+bool faceIterAtEnd(const FaceIter *pIter) {
+	return
+		pIter->err != STUC_SUCCESS ||
 		pIter->boundary >= pIter->pFace->boundaries ||
 		pIter->boundary == pIter->pFace->boundaries - 1 &&
-		pIter->corner >= faceIterInternGetSize(pIter)
-	) {
+		pIter->corner >= faceIterInternGetSize(pIter);
+}
+
+static
+bool faceIterSetCorner(FaceIter *pIter) {
+	if (faceIterAtEnd(pIter)) {
 		return true;
 	}
 	if (pIter->corner) {
@@ -492,11 +499,11 @@ Result intersectHalfEdges(
 	return err;
 }
 
-typedef enum Turn {
-	TURNS_STRAIGHT,
-	TURNS_LEFT,
-	TURNS_RIGHT
-} Turn;
+typedef enum Hand {
+	HAND_STRAIGHT,
+	HAND_LEFT,
+	HAND_RIGHT
+} Hand;
 
 typedef enum Neighbour {
 	NEIGHBOUR_PREV,
@@ -504,9 +511,9 @@ typedef enum Neighbour {
 } Neighbour;
 
 typedef struct LocalInfo {
-	Turn turnSNext;
-	Turn turnCPrev;
-	Turn turnCNext;
+	Hand turnSNext;
+	Hand turnCPrev;
+	Hand turnCNext;
 	Neighbour sPrevLink;
 	Neighbour sNextLink;
 	bool sPrevOnC;
@@ -539,8 +546,8 @@ LocalInfo getLocalInfoForIntersect(const Corner *pClip, const Corner *pSubj) {
 	V2_F32 sNext = *(V2_F32 *)&pSubj->pNext->pos;
 	F32 signSNext = getSignedArea(sPrev, point, sNext);
 	LocalInfo info = {
-		.turnSNext = _(signSNext F32_EQL .0f) ? TURNS_STRAIGHT :
-			_(signSNext F32_GREAT .0f) ? TURNS_LEFT : TURNS_RIGHT,
+		.turnSNext = _(signSNext F32_EQL .0f) ? HAND_STRAIGHT :
+			_(signSNext F32_GREAT .0f) ? HAND_LEFT : HAND_RIGHT,
 	};
 	info.sPrevOnC =
 		isLinkWithPrevOrNext(pSubj->pPrev, pClip->pPrev, pClip->pNext, &info.sPrevLink);
@@ -553,18 +560,18 @@ LocalInfo getLocalInfoForIntersect(const Corner *pClip, const Corner *pSubj) {
 	F32 signCNext_0 = getSignedArea(cNext, sPrev, point);
 	F32 signCNext_1 = getSignedArea(cNext, point, sNext);
 	switch (info.turnSNext) {
-		case TURNS_STRAIGHT:
-		case TURNS_LEFT:
+		case HAND_STRAIGHT:
+		case HAND_LEFT:
 			info.turnCPrev = _(signCPrev_0 F32_LESS .0f) || _(signCPrev_1 F32_LESS .0f) ? 
-				TURNS_RIGHT : TURNS_LEFT;
+				HAND_RIGHT : HAND_LEFT;
 			info.turnCNext = _(signCNext_0 F32_LESS .0f) || _(signCNext_1 F32_LESS .0f) ?
-				TURNS_RIGHT : TURNS_LEFT;
+				HAND_RIGHT : HAND_LEFT;
 			break;
-		case TURNS_RIGHT:
+		case HAND_RIGHT:
 			info.turnCPrev = _(signCPrev_0 F32_GREAT .0f) || _(signCPrev_1 F32_GREAT .0f) ? 
-				TURNS_LEFT : TURNS_RIGHT;
+				HAND_LEFT : HAND_RIGHT;
 			info.turnCNext = _(signCNext_0 F32_GREAT .0f) || _(signCNext_1 F32_GREAT .0f) ?
-				TURNS_LEFT : TURNS_RIGHT;
+				HAND_LEFT : HAND_RIGHT;
 	}
 	return info;
 }
@@ -573,6 +580,12 @@ static
 void setLinkLabel(Corner *pCorner, Label label) {
 	STUC_ASSERT("", pCorner->pLink);
 	pCorner->pLink->label = pCorner->label = label;
+}
+
+static
+void setLinkCross(Corner *pCorner) {
+	STUC_ASSERT("", pCorner->pLink);
+	pCorner->pLink->cross = pCorner->cross = true;
 }
 
 static
@@ -589,7 +602,7 @@ Result labelCrossOrBounce(Face *pSubjFace) {
 	Result err = STUC_SUCCESS;
 	FaceIter subjIter = {0};
 	faceIterInit(pSubjFace, NULL, NULL, NULL, false, &subjIter);
-	for (; !faceIterAtEnd(&subjIter); faceIterInc(&subjIter)) {
+	for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
 		if (!subjIter.pCorner->pLink) {
 			continue;
 		}
@@ -602,21 +615,22 @@ Result labelCrossOrBounce(Face *pSubjFace) {
 		}
 		else if (info.sPrevOnC) {
 			//subject-,subject overlaps with clip,clip+ or clip-,clip
-			Turn cTurn = info.sPrevLink == NEIGHBOUR_PREV ?
+			Hand cTurn = info.sPrevLink == NEIGHBOUR_PREV ?
 				info.turnCNext : info.turnCPrev;
-			label = cTurn == TURNS_RIGHT ? LABEL_ON_LEFT : LABEL_ON_RIGHT;
+			label = cTurn == HAND_RIGHT ? LABEL_ON_LEFT : LABEL_ON_RIGHT;
 		}
 		else if (info.sNextOnC) {
 			//subject,subject+ overlaps with clip,clip+ or clip-,clip
-			Turn cTurn = info.sNextLink == NEIGHBOUR_PREV ?
+			Hand cTurn = info.sNextLink == NEIGHBOUR_PREV ?
 				info.turnCNext : info.turnCPrev;
-			label = cTurn == TURNS_RIGHT ? LABEL_LEFT_ON : LABEL_RIGHT_ON;
+			label = cTurn == HAND_RIGHT ? LABEL_LEFT_ON : LABEL_RIGHT_ON;
 		}
 		else if (info.turnCPrev == info.turnCNext) {
 			label = LABEL_BOUNCE;
 		}
 		else {
 			label = LABEL_CROSS;
+			setLinkCross(subjIter.pCorner);
 		}
 		setLinkLabel(subjIter.pCorner, label);
 	}
@@ -628,7 +642,7 @@ Result labelCrossOrBounce(Face *pSubjFace) {
 	} OverlapChain;
 	OverlapChain chain = {0};
 	faceIterInit(pSubjFace, NULL, noOnLeftRightPredicate, NULL, false, &subjIter);
-	for (; !faceIterAtEnd(&subjIter); faceIterInc(&subjIter)) {
+	for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
 		Label label = subjIter.pCorner->label;
 		if (!subjIter.pCorner->pLink || label == LABEL_CROSS || label == LABEL_BOUNCE) {
 			STUC_ASSERT("", !chain.pStart);
@@ -638,15 +652,12 @@ Result labelCrossOrBounce(Face *pSubjFace) {
 			STUC_ASSERT("", label == LABEL_LEFT_ON || label == LABEL_RIGHT_ON);
 			chain.pStart = subjIter.pCorner;
 		}
-		else if (label == LABEL_ON_ON){
-			setLinkLabel(subjIter.pCorner, LABEL_BOUNCE_DELAYED);
-		}
-		else {
+		else if (label != LABEL_ON_ON){
 			STUC_ASSERT("", label == LABEL_ON_LEFT || label == LABEL_ON_RIGHT);
 			label = (chain.pStart->label == LABEL_LEFT_ON) == (label == LABEL_ON_LEFT) ?
 				LABEL_BOUNCE_DELAYED : LABEL_CROSS_DELAYED;
 			setLinkLabel(subjIter.pCorner, label);
-			setLinkLabel(chain.pStart, LABEL_BOUNCE_DELAYED);
+			setLinkLabel(chain.pStart, label);
 			chain.pStart = NULL;
 		}
 	}
@@ -668,7 +679,7 @@ Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
 	I32 windNum = 0;
 	FaceIter iter = {0};
 	faceIterInit(pFace, NULL, NULL, NULL, true, &iter);
-	for (; !faceIterAtEnd(&iter); faceIterInc(&iter)) {
+	for (; !faceIterSetCorner(&iter); faceIterInc(&iter)) {
 		V3_F32 pos = iter.pCorner->pos;
 		V3_F32 posNext = iter.pCorner->pNextOrigin->pos;
 		F32 aRay = .0f;
@@ -710,11 +721,6 @@ Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
 	STUC_RETURN_ERR_IFNOT(err, "")
 	*pIn = windNum % 2;
 	return err;
-}
-
-static
-bool isCornerCross(const Corner *pCorner) {
-	return pCorner->label == LABEL_CROSS || pCorner->label == LABEL_CROSS_DELAYED;
 }
 
 typedef struct LabelIterArgs {
@@ -777,6 +783,12 @@ Result labelIterHandleNoStart(void *pUserData, FaceRoot *pRoot, Corner **ppStart
 	return err;
 }
 
+static
+bool isCornerDelayed(const Corner *pCorner) {
+	return
+		pCorner->label == LABEL_CROSS_DELAYED || pCorner->label == LABEL_BOUNCE_DELAYED;
+
+}
 
 static
 Result labelCrossDir(LinAlloc *pCornerAlloc, Face *pFaceA, Face *pFaceB) {
@@ -797,8 +809,10 @@ Result labelCrossDir(LinAlloc *pCornerAlloc, Face *pFaceA, Face *pFaceB) {
 		false,
 		&iter
 	);
+	bool chainActive = false;
+	CrossDir chainTravel = 0;
 	//TODO handle no start corner
-	for (; !faceIterAtEnd(&iter); faceIterInc(&iter)) {
+	for (; !faceIterSetCorner(&iter); faceIterInc(&iter)) {
 		if (!iter.pCorner) {
 			//skip this boundary
 			if (commonEdges) {
@@ -810,10 +824,35 @@ Result labelCrossDir(LinAlloc *pCornerAlloc, Face *pFaceA, Face *pFaceB) {
 		if (!iter.pCorner->pLink) {
 			continue;
 		}
-		if (isCornerCross(iter.pCorner)) {
+		bool cross = false;
+		if (isCornerDelayed(iter.pCorner)) {
+			if (!chainActive) {
+				chainTravel = in ? CROSS_EXIT : CROSS_ENTRY;
+			}
+			switch (iter.pCorner->label) {
+				case LABEL_BOUNCE_DELAYED:
+					if (chainTravel == CROSS_EXIT) {
+						iter.pCorner->label = LABEL_CROSS_CANDIDATE;
+					}
+					cross = true;
+					break;
+				case LABEL_CROSS_DELAYED:
+					iter.pCorner->travel = chainTravel;
+					if (chainActive && chainTravel == CROSS_ENTRY ||
+						!chainActive && chainTravel == CROSS_EXIT
+					) {
+						iter.pCorner->cross = true;
+					}
+					break;
+				default:
+					STUC_ASSERT("", false);
+			}
+			chainActive = !chainActive;
+		}
+		if (iter.pCorner->cross || cross) {
 			iter.pCorner->travel = in ? CROSS_EXIT : CROSS_ENTRY;
 			in = !in;
-		}
+		} 
 	}
 	err = faceIterGetErr(&iter);
 	STUC_RETURN_ERR_IFNOT(err, "");
@@ -821,21 +860,19 @@ Result labelCrossDir(LinAlloc *pCornerAlloc, Face *pFaceA, Face *pFaceB) {
 }
 
 static
-Result getFirstClipEntry(Face *pFace, Corner **ppStart) {
+Result getFirstClipEntry(FaceIter *pIter, Corner **ppStart) {
 	Result err = STUC_SUCCESS;
-	FaceIter iter = {0};
-	faceIterInit(pFace, NULL, NULL, NULL, false, &iter);
-	for (; !faceIterAtEnd(&iter); faceIterInc(&iter)) {
-		if (!iter.pCorner->checked &&
-			iter.pCorner->pLink &&
-			isCornerCross(iter.pCorner) &&
-			iter.pCorner->travel == CROSS_ENTRY
+	for (; !faceIterSetCorner(pIter); faceIterInc(pIter)) {
+		if (!pIter->pCorner->checked &&
+			pIter->pCorner->pLink &&
+			pIter->pCorner->cross
 		) {
-			*ppStart = iter.pCorner;
+			*ppStart = pIter->pCorner;
+			faceIterInc(pIter);
 			return err;
 		}
 	}
-	err = faceIterGetErr(&iter);
+	err = faceIterGetErr(pIter);
 	STUC_RETURN_ERR_IFNOT(err, "");
 	return err;
 }
@@ -858,7 +895,9 @@ void setOutCornerInfo(ClipCorner *pOut, const Corner *pCorner) {
 			pOut->info.intersect.clipAlpha = pClip->alpha;
 			pOut->info.intersect.subjAlpha = pSubj->alpha;
 			break;
+		case LABEL_ON_ON:
 		case LABEL_CROSS_DELAYED:
+		case LABEL_CROSS_CANDIDATE:
 		case LABEL_BOUNCE:
 		case LABEL_BOUNCE_DELAYED:
 			if (pCorner->original && pCorner->pLink->original) {
@@ -894,6 +933,7 @@ void addCorner(ClipFaceArr *pArr, I32 face, const Corner *pCorner) {
 			pOut = pOut->pNext;
 		}
 		pOut->pNext = pNew;
+		pNew->pPrev = pOut;
 	}
 	setOutCornerInfo(pNew, pCorner);
 	++pArr->pArr[face].size;
@@ -924,44 +964,75 @@ I32 beginFace(
 }
 
 static
+void reverseWind(ClipFaceArr *pArr, I32 face) {
+	ClipCorner *pCorner = pArr->pArr[face].pRoot;
+	if (!pCorner) {
+		return;
+	}
+	do {
+		ClipCorner *pNext = pCorner->pNext;
+		pCorner->pNext = pCorner->pPrev;
+		pCorner->pPrev = pNext;
+		if (!pNext) {
+			break;
+		}
+		pCorner = pNext;
+	} while(true);
+	pArr->pArr[face].pRoot = pCorner;
+}
+
+static
 Result makeClippedFaces(
 	const StucAlloc *pAlloc,
-	const Face *pClipFace,
+	Face *pClipFace,
 	Face *pSubjFace,
 	ClipFaceArr *pOutArr
 ) {
 	Result err = STUC_SUCCESS;
 	I32 clipSize = getFaceSize(pClipFace);
 	I32 subjSize = getFaceSize(pSubjFace);
+	FaceIter iter = {0};
+	faceIterInit(pSubjFace, NULL, NULL, NULL, false, &iter);
 	do {
 		Corner *pStart = NULL;
-		err = getFirstClipEntry(pSubjFace, &pStart);
+		err = getFirstClipEntry(&iter, &pStart);
 		STUC_RETURN_ERR_IFNOT(err, "");
+		/*
+		if (!pStart && iter.pFace != pClipFace) {
+			STUC_ASSERT("", iter.pFace == pSubjFace && faceIterAtEnd(&iter));
+			faceIterInit(pClipFace, NULL, NULL, NULL, false, &iter);
+			err = getFirstClipEntry(&iter, &pStart);
+			STUC_RETURN_ERR_IFNOT(err, "");
+		}
+		*/
 		if (!pStart) {
+			STUC_ASSERT("", faceIterAtEnd(&iter));
 			return err;
 		}
 		I32 outFace = beginFace(pAlloc, pOutArr, pStart);
-		Corner *pCorner = pStart->pLink;
+		Corner *pCorner = pStart;
 		I32 i = 0;
-		CrossDir travel = pCorner->travel == CROSS_ENTRY ? CROSS_EXIT : CROSS_ENTRY;
 		do {
 			STUC_RETURN_ERR_IFNOT_COND(
 				err,
 				i < clipSize + subjSize,
 				"infinite or astray loop"
 			);
-			addCorner(pOutArr, outFace, pCorner);
 			pCorner->checked = true;
-			if (pCorner->pLink && isCornerCross(pCorner) &&
-				pCorner->travel != travel
-			) {
-				STUC_ASSERT("", pCorner->pLink);
-				pCorner = pCorner->pLink;
-				travel = pCorner->travel;
+			CrossDir travel = pCorner->travel;
+			do {
+				pCorner = travel == CROSS_ENTRY ? pCorner->pNext : pCorner->pPrev;
 				pCorner->checked = true;
+				addCorner(pOutArr, outFace, pCorner);
+			} while((!pCorner->cross || pCorner->travel == travel) && pCorner != pStart);
+			STUC_ASSERT("", pCorner->pLink);
+			if (pCorner != pStart) {
+				pCorner = pCorner->pLink;
 			}
-			pCorner = travel == CROSS_ENTRY ? pCorner->pNext : pCorner->pPrev;
-		} while(++i, !pCorner->checked);
+		} while(++i, pCorner != pStart);
+		if (pStart->travel == CROSS_EXIT) {
+			reverseWind(pOutArr, outFace);
+		}
 		//unlike clip and subject, out-face corners are not circularly linked
 	} while(true);
 	return err;
@@ -983,6 +1054,23 @@ I32 getFaceSize(const Face *pFace) {
 		size += pFace->pRoots[i].size;
 	}
 	return size;
+}
+
+static
+Result processCandidates(Face *pSubj) {
+	Result err = STUC_SUCCESS;
+	FaceIter iter = {0};
+	faceIterInit(pSubj, NULL, NULL, NULL, false, &iter);
+	for (; !faceIterSetCorner(&iter); faceIterInc(&iter)) {
+		if (iter.pCorner->label == LABEL_CROSS_CANDIDATE &&
+			iter.pCorner->pLink->label == LABEL_CROSS_CANDIDATE
+		) {
+			setLinkCross(iter.pCorner);
+		}
+	}
+	err = faceIterGetErr(&iter);
+	STUC_RETURN_ERR_IFNOT(err, "");
+	return err;
 }
 
 Result stucClip(
@@ -1026,10 +1114,10 @@ Result stucClip(
 	//find intersections
 	FaceIter clipIter = {0};
 	faceIterInit(&clip, NULL, NULL, NULL, true, &clipIter);
-	for (; !faceIterAtEnd(&clipIter); faceIterInc(&clipIter)) {
+	for (; !faceIterSetCorner(&clipIter); faceIterInc(&clipIter)) {
 		FaceIter subjIter = {0};
 		faceIterInit(&subj, NULL, NULL, NULL, true, &subjIter);
-		for (; !faceIterAtEnd(&subjIter); faceIterInc(&subjIter)) {
+		for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
 			err = intersectHalfEdges(
 				&cornerAlloc,
 				faceIterGetRoot(&clipIter), faceIterGetRoot(&subjIter),
@@ -1048,6 +1136,9 @@ Result stucClip(
 	err = labelCrossDir(&cornerAlloc, &subj, &clip);
 	STUC_THROW_IFNOT(err, "", 0);
 	err = labelCrossDir(&cornerAlloc, &clip, &subj);
+	STUC_THROW_IFNOT(err, "", 0);
+
+	err = processCandidates(&subj);
 	STUC_THROW_IFNOT(err, "", 0);
 
 	*pOut = (ClipFaceArr) {0};
