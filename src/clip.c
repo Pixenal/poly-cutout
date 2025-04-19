@@ -913,7 +913,7 @@ I32 beginFace(
 		pArr->size = 4;
 		pArr->pArr = pAlloc->fpMalloc(pArr->size * sizeof(ClipFaceRoot));
 	}
-	else if (pArr->count < pArr->size) {
+	else if (pArr->count == pArr->size) {
 		pArr->size *= 2;
 		pArr->pArr = pAlloc->fpRealloc(pArr->pArr, pArr->size * sizeof(ClipFaceRoot));
 	}
