@@ -696,7 +696,7 @@ Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
 		if (_(aFaceEdge F32_GREAT .0f) && _(aFaceEdge F32_LESS 1.0f)) {
 			++windNum;
 		}
-		else if (_(aFaceEdge F32_EQL .0f)) {
+		else if (_(aFaceEdge F32_EQL .0f) || _(aFaceEdge F32_EQL 1.0f)) {
 			V2_F32 rayNormal = v2F32LineNormal(_(*(V2_F32 *)&rayB V2SUB pointV2));
 			const Corner *pNeighbour = delayed.active ?
 				iter.pCorner->pNextOrigin : iter.pCorner->pPrevOrigin;
@@ -709,7 +709,7 @@ Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
 				delayed.signFirst = signNeighbour;
 				continue;
 			}
-			if (signNeighbour != delayed.signFirst) {
+			if (_(signNeighbour F32_NOTEQL delayed.signFirst)) {
 				//delayed crossing
 				++windNum;
 			}
