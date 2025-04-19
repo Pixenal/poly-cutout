@@ -68,7 +68,7 @@ typedef struct FaceIter {
 	Corner *pCorner;
 	Corner *pStart;
 	Result (* fpStartPredicate)(void *, const Corner *, bool *);
-	Result (* fpHandleNoStart)(void *, Corner **);
+	Result (* fpHandleNoStart)(void *, FaceRoot *, Corner **);
 	I32 boundary;
 	I32 corner;
 	I32 count;
@@ -82,7 +82,7 @@ void faceIterInit(
 	Face *pFace,
 	void *pUserData,
 	Result (* fpStartPredicate)(void *, const Corner *, bool *),
-	Result (* fpHandleNoStart)(void *, Corner **),
+	Result (* fpHandleNoStart)(void *, FaceRoot *, Corner **),
 	bool originOnly,
 	FaceIter *pIter
 	) {
@@ -129,14 +129,17 @@ Result faceIterInternFindValidStart(FaceIter *pIter) {
 				pIter->fpHandleNoStart,
 				"no valid start corner found"
 			);
-			err = pIter->fpHandleNoStart(pIter->pUserData, &pIter->pCorner);
+			FaceRoot *pRoot = pIter->pFace->pRoots + pIter->boundary;
+			err = pIter->fpHandleNoStart(pIter->pUserData, pRoot, &pIter->pCorner);
 			STUC_RETURN_ERR_IFNOT(err, "");
-			err = pIter->fpStartPredicate(pIter->pUserData, pIter->pCorner, &valid);
-			STUC_RETURN_ERR_IFNOT(err, "");
-			STUC_ASSERT(
-				"'no start' handler gave start corner that doesn't pass predicate",
-				valid
-			);
+			if (pIter->pCorner) {
+				err = pIter->fpStartPredicate(pIter->pUserData, pIter->pCorner, &valid);
+				STUC_RETURN_ERR_IFNOT(err, "");
+				STUC_ASSERT(
+					"'no start' handler gave start corner that doesn't pass predicate",
+					valid
+				);
+			}
 			if (!valid) {
 			}
 			return err;
@@ -180,7 +183,7 @@ void faceIterInc(FaceIter *pIter) {
 	++pIter->corner;
 	if (!pIter->pStart || pIter->corner >= faceIterInternGetSize(pIter)) {
 		if (!pIter->pStart) {
-			STUC_ASSERT("start is null, but corner isn't?", pIter->pCorner);
+			STUC_ASSERT("start is null, but corner isn't?", !pIter->pCorner);
 		}
 		else {
 			Corner *pCornerNext = pIter->originOnly ?
@@ -269,7 +272,7 @@ void cornerListInit(
 }
 
 static
-getSignedArea(V2_F32 a, V2_F32 b, V2_F32 c) {
+F32 getSignedArea(V2_F32 a, V2_F32 b, V2_F32 c) {
 	return _(_(b V2SUB a) V2CROSS _(c V2SUB a));
 }
 
@@ -716,7 +719,6 @@ bool isCornerCross(const Corner *pCorner) {
 
 typedef struct LabelIterArgs {
 	LinAlloc *pCornerAlloc;
-	Face *pFaceA;
 	Face *pFaceB;
 	bool *pIn;
 	bool *pCommonEdges;
@@ -743,36 +745,34 @@ bool isEdgeCommon(const Corner *pA) {
 }
 
 static
-Result labelIterHandleNoStart(void *pUserData, Corner **ppStart) {
+Result labelIterHandleNoStart(void *pUserData, FaceRoot *pRoot, Corner **ppStart) {
 	Result err = STUC_SUCCESS;
 	LabelIterArgs *pArgs = pUserData;
-	FaceIter iter = {0};
-	faceIterInit(pArgs->pFaceA, NULL, NULL, NULL, false, &iter);
 	bool uncommonEdge = false;
-	for (; !faceIterAtEnd(&iter); faceIterInc(&iter)) {
+	Corner *pCorner = pRoot->pRoot;
+	for (I32 i = 0; !i || pCorner != pRoot->pRoot; ++i, pCorner = pCorner->pNext) {
+		STUC_RETURN_ERR_IFNOT_COND(err, i < pRoot->size, "infinite or astray loop");
 		STUC_ASSERT(
 			"found an original corner, why was this func called?",
-			iter.pCorner->pLink
+			pCorner->pLink
 		);
-		if (!isEdgeCommon(iter.pCorner)) {
+		if (!isEdgeCommon(pCorner)) {
 			uncommonEdge = true;
 			break;
 		}
 	}
-	err = faceIterGetErr(&iter);
-	STUC_RETURN_ERR_IFNOT(err, "");
 	if (!uncommonEdge) {
 		*ppStart = NULL;
 		*pArgs->pCommonEdges = true;
 		return err;
 	}
-	Corner *pA = iter.pCorner;
-	Corner *pB = iter.pCorner->pNext;
+	Corner *pA = pCorner;
+	Corner *pB = pCorner->pNext;
 	V3_F32 midPoint = _(pA->pos V3ADD _(_(pB->pos V3SUB pA->pos) V3DIVS 2.0f));
 	Corner *pNew = NULL;
 	stucLinAlloc(pArgs->pCornerAlloc, &pNew, 1);
 	pNew->pos = midPoint;
-	insertCorner(pArgs->pFaceA->pRoots + iter.boundary, pA, pNew, true);
+	insertCorner(pRoot, pA, pNew, true);
 	*ppStart = pNew;
 	return err;
 }
@@ -786,7 +786,6 @@ Result labelCrossDir(LinAlloc *pCornerAlloc, Face *pFaceA, Face *pFaceB) {
 	bool commonEdges = false;
 	LabelIterArgs labelIterArgs = {
 		.pCornerAlloc = pCornerAlloc,
-		.pFaceA = pFaceA,
 		.pFaceB = pFaceB,
 		.pIn = &in,
 		.pCommonEdges = &commonEdges
@@ -944,7 +943,7 @@ Result makeClippedFaces(
 		I32 outFace = beginFace(pAlloc, pOutArr, pStart);
 		Corner *pCorner = pStart->pLink;
 		I32 i = 0;
-		CrossDir travel = CROSS_EXIT;
+		CrossDir travel = pCorner->travel == CROSS_ENTRY ? CROSS_EXIT : CROSS_ENTRY;
 		do {
 			STUC_RETURN_ERR_IFNOT_COND(
 				err,
