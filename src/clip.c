@@ -4,6 +4,8 @@
 #include <clip.h>
 #include <utils.h>
 
+#define SNAP_THRESHOLD .0001f
+
 typedef enum Label {
 	LABEL_NONE,
 	LABEL_CROSS,
@@ -288,11 +290,25 @@ static
 I32 getIntersectAlpha(V3_F32 a, V3_F32 b, V3_F32 c, V3_F32 d, F32 *pAlpha) {
 	F32 acd = getSignedArea(*(V2_F32 *)&a, *(V2_F32 *)&c, *(V2_F32 *)&d);
 	F32 bcd = getSignedArea(*(V2_F32 *)&b, *(V2_F32 *)&c, *(V2_F32 *)&d);
-	F32 divisor = (acd - bcd);
-	if (_(divisor F32_EQL .0f)) {
-		return _(acd F32_EQL .0f) ? 2 : 1;
+	F32 cdLen = v2F32Len(_(*(V2_F32 *)&d V2SUB *(V2_F32 *)&c));
+	F32 hAcd = acd / cdLen;
+	F32 hBcd = bcd / cdLen;
+	F32 diff = fabsf(hAcd - hBcd);
+	bool aIsOnCd = _(fabsf(hAcd) F32_LESS SNAP_THRESHOLD);
+	if (_(diff F32_LESS SNAP_THRESHOLD)) {
+		return aIsOnCd ? 2 : 1;
 	}
-	*pAlpha = acd / divisor;
+	if (aIsOnCd) {
+		*pAlpha = .0f;
+	}
+	else if (_(fabsf(hBcd) F32_LESS SNAP_THRESHOLD)) {
+		*pAlpha = 1.0f;
+	}
+	else {
+		F32 divisor = acd - bcd;
+		STUC_ASSERT("", _(divisor F32_NOTEQL .0f));
+		*pAlpha = acd / divisor;
+	}
 	return 0;
 }
 
@@ -376,6 +392,22 @@ Result handleXIntersect(
 }
 
 static
+F32 getColinearAlpha(V2_F32 a, V2_F32 b, V2_F32 c) {
+	V2_F32 ab = _(b V2SUB a);
+	V2_F32 ac = _(c V2SUB a);
+	//assuming here that a != b, degen edge check should have caught that prior
+	F32 alpha =  _(ac V2DOT ab) / _(ab V2DOT ab);
+	F32 abLen = v2F32Len(ab);
+	if (_(fabsf(alpha * abLen) F32_LESS SNAP_THRESHOLD)) {
+		alpha = .0f;
+	}
+	else if (_(fabsf((1.0f - alpha) * abLen) F32_LESS SNAP_THRESHOLD)) {
+		alpha = 1.0f;
+	}
+	return alpha;
+}
+
+static
 Result insertIntersect(
 	LinAlloc *pAlloc,
 	FaceRoot *pClipRoot, FaceRoot *pSubjRoot,
@@ -397,9 +429,11 @@ Result insertIntersect(
 		}
 		return err;
 	}
-	bool aClipIsIn01 = _(aClipEdge F32_GREAT .0f) && _(aClipEdge F32_LESS 1.0f);
-	bool aSubjIsIn01 = _(aSubjEdge F32_GREAT .0f) && _(aSubjEdge F32_LESS 1.0f);
-	if (aClipIsIn01 && aSubjIsIn01) {
+	//alphas are set to 0 or 1 in getIntersectAlpha, if within snap threshold.
+	// so not using epsilon here
+	if (aClipEdge > .0f && aClipEdge < 1.0f &&
+		aSubjEdge > .0f && aSubjEdge < 1.0f
+	) {
 		//X intersection
 		err = handleXIntersect(
 			pAlloc,
@@ -409,30 +443,44 @@ Result insertIntersect(
 		);
 		STUC_RETURN_ERR_IFNOT(err, "");
 	}
-	else if (_(aSubjEdge F32_EQL .0f) && aClipIsIn01) {
-		//T intersection on clip edge
-		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj);
-		STUC_RETURN_ERR_IFNOT(err, "");
-	}
-	else if (_(aClipEdge F32_EQL .0f) && aSubjIsIn01) {
-		//T intersection on subject edge
-		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip);
-		STUC_RETURN_ERR_IFNOT(err, "");
-	}
-	else if (_(aClipEdge F32_EQL aSubjEdge) && _(aClipEdge F32_EQL .0f)) {
+	else if (!aClipEdge && !aSubjEdge) {
 		//V intersection
 		STUC_RETURN_ERR_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
 		linkCorners(pClip, pSubj);
 	}
+	else if (!aSubjEdge) {
+		aClipEdge = getColinearAlpha(
+			*(V2_F32 *)&pClip->pos, *(V2_F32 *)&pClip->pNextOrigin->pos,
+			*(V2_F32 *)&pSubj->pos
+		);
+		if (!aClipEdge) {
+			//V intersection
+			STUC_RETURN_ERR_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
+			linkCorners(pClip, pSubj);
+		}
+		else if (aClipEdge > .0f && aClipEdge < 1.0f) {
+			//T intersection on clip edge
+			err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj);
+			STUC_RETURN_ERR_IFNOT(err, "");
+		}
+	}
+	else if (!aClipEdge) {
+		aSubjEdge = getColinearAlpha(
+			*(V2_F32 *)&pSubj->pos, *(V2_F32 *)&pSubj->pNextOrigin->pos,
+			*(V2_F32 *)&pClip->pos
+		);
+		if (!aSubjEdge) {
+			//V intersection
+			STUC_RETURN_ERR_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
+			linkCorners(pClip, pSubj);
+		}
+		else if (aSubjEdge > .0f && aSubjEdge < 1.0f) {
+			//T intersection on subject edge
+			err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip);
+			STUC_RETURN_ERR_IFNOT(err, "");
+		}
+	}
 	return err;
-}
-
-static
-F32 getColinearAlpha(V2_F32 a, V2_F32 b, V2_F32 c) {
-	V2_F32 ab = _(b V2SUB a);
-	V2_F32 ac = _(c V2SUB a);
-	//assuming here that a != b, degen edge check should have caught that prior
-	return _(ac V2DOT ab) / _(ab V2DOT ab);
 }
 
 static
@@ -450,8 +498,10 @@ Result insertOverlap(
 		*(V2_F32 *)&pSubj->pos, *(V2_F32 *)&pSubj->pNextOrigin->pos,
 		*(V2_F32 *)&pClip->pos
 	);
-	bool aClipIsIn01 = _(aClipEdge F32_GREAT .0f) && _(aClipEdge F32_LESS 1.0f);
-	bool aSubjIsIn01 = _(aSubjEdge F32_GREAT .0f) && _(aSubjEdge F32_LESS 1.0f);
+	//getColinearAlpha sets alpha to 0 or 1, if within snap threshold.
+	// so not using epsilon here
+	bool aClipIsIn01 = aClipEdge > .0f && aClipEdge < 1.0f;
+	bool aSubjIsIn01 = aSubjEdge > .0f && aSubjEdge < 1.0f;
 	if (aClipIsIn01 && aSubjIsIn01) {
 		//X overlap
 		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj);
@@ -459,17 +509,17 @@ Result insertOverlap(
 		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip);
 		STUC_RETURN_ERR_IFNOT(err, "");
 	}
-	else if (aClipIsIn01 && (!aSubjIsIn01 || _(aSubjEdge F32_EQL 1.0f))) {
+	else if (aClipIsIn01 && (!aSubjIsIn01 || aSubjEdge == 1.0f)) {
 		//T overlap on clip edge
 		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj);
 		STUC_RETURN_ERR_IFNOT(err, "");
 	}
-	else if (aSubjIsIn01 && (!aClipIsIn01 || _(aClipEdge F32_EQL 1.0f))) {
+	else if (aSubjIsIn01 && (!aClipIsIn01 || aClipEdge == 1.0f)) {
 		//T overlap on subj edge
 		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip);
 		STUC_RETURN_ERR_IFNOT(err, "");
 	}
-	else if (_(aSubjEdge F32_EQL aClipEdge) && _(aSubjEdge F32_EQL .0f)) {
+	else if (!aClipEdge && !aSubjEdge) {
 		//V overlap
 		linkCorners(pClip, pSubj);
 	}
@@ -667,6 +717,21 @@ Result labelCrossOrBounce(Face *pSubjFace) {
 }
 
 static
+Result inTestStartPredicate(void *pUserData, const Corner *pCorner, bool *pValid) {
+	F32 diff = pCorner->pos.d[0] - ((V2_F32 *)pUserData)->d[0];
+	*pValid = _(fabsf(diff) F32_GREAT SNAP_THRESHOLD * 4.0f);
+	return STUC_SUCCESS;
+}
+
+static
+Result inTestNoStartHandler(void *pUserData, FaceRoot *pRoot, Corner **ppStart) {
+	*ppStart = NULL;
+	return STUC_SUCCESS;
+}
+
+//TODO this can fail if parallel edge is slightly off vertical.
+//improve
+static
 Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
 	Result err = STUC_SUCCESS;
 	typedef struct Delayed {
@@ -676,40 +741,52 @@ Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
 	Delayed delayed = {0};
 	V2_F32 pointV2 = *(V2_F32 *)&point;
 	V3_F32 rayB = (V3_F32) {.d = {point.d[0], point.d[1] + 1.0f, .0f}};
+	V2_F32 rayNormal = v2F32LineNormal(_(*(V2_F32 *)&rayB V2SUB pointV2));
 	I32 windNum = 0;
 	FaceIter iter = {0};
-	faceIterInit(pFace, NULL, NULL, NULL, true, &iter);
+	faceIterInit(
+		pFace,
+		&pointV2, inTestStartPredicate, inTestNoStartHandler,
+		//NULL, NULL, NULL,
+		true,
+		&iter
+	);
 	for (; !faceIterSetCorner(&iter); faceIterInc(&iter)) {
+		if (!iter.pCorner) {
+			//skipping this boundary, all corners lie on ray
+			continue;
+		}
 		V3_F32 pos = iter.pCorner->pos;
 		V3_F32 posNext = iter.pCorner->pNextOrigin->pos;
 		F32 aRay = .0f;
-		if (getIntersectAlpha(point, rayB, pos, posNext, &aRay) ||
-			_(aRay F32_LESSEQL .0f)
-		) {
-			//lines are parallel, or intersection is outside of ray
+		//getIntersectAlpha snaps to 0 or 1 if within threshold, so not using epsilon
+		if (getIntersectAlpha(point, rayB, pos, posNext, &aRay) || aRay <= .0f) {
+			//lines are parallel, or intersection is outside ray
 			continue;
 		}
 		F32 aFaceEdge = .0f;
 		if (getIntersectAlpha(pos, posNext, point, rayB, &aFaceEdge)) {
 			continue;
 		}
-		if (_(aFaceEdge F32_GREAT .0f) && _(aFaceEdge F32_LESS 1.0f)) {
+		if (aFaceEdge > .0f && aFaceEdge < 1.0f) {
 			++windNum;
+			continue;
 		}
-		else if (_(aFaceEdge F32_EQL .0f) || _(aFaceEdge F32_EQL 1.0f)) {
-			V2_F32 rayNormal = v2F32LineNormal(_(*(V2_F32 *)&rayB V2SUB pointV2));
-			const Corner *pNeighbour = delayed.active ?
-				iter.pCorner->pNextOrigin : iter.pCorner->pPrevOrigin;
-			bool signNeighbour = _(
-				_(_(*(V2_F32 *)&pNeighbour->pos V2SUB pointV2) V2DOT rayNormal) F32_GREAT
-				.0f
-			);
-			if (!delayed.active) {
-				delayed.active = true;
-				delayed.signFirst = signNeighbour;
-				continue;
-			}
-			if (_(signNeighbour F32_NOTEQL delayed.signFirst)) {
+		if (aFaceEdge != .0f && aFaceEdge != 1.0f) {
+			continue;
+		}
+		const Corner *pNeighbour = aFaceEdge == .0f ?
+			iter.pCorner->pNextOrigin : iter.pCorner;
+		bool sign = _(
+			_(_(*(V2_F32 *)&pNeighbour->pos V2SUB pointV2) V2DOT rayNormal) F32_GREAT
+			.0f
+		);
+		if (!delayed.active) {
+			delayed.active = true;
+			delayed.signFirst = sign;
+		}
+		else {
+			if (_(sign F32_NOTEQL delayed.signFirst)) {
 				//delayed crossing
 				++windNum;
 			}
