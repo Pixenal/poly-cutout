@@ -213,6 +213,12 @@ void faceIterInc(FaceIter *pIter) {
 }
 
 static
+void faceIterIncBoundary(FaceIter *pIter) {
+	pIter->pStart = pIter->pCorner = NULL;
+	faceIterInc(pIter);
+}
+
+static
 FaceRoot *faceIterGetRoot(FaceIter *pIter) {
 	STUC_ASSERT("", pIter->boundary < pIter->pFace->boundaries);
 	return pIter->pFace->pRoots + pIter->boundary;
@@ -343,6 +349,13 @@ Result insertCorner(FaceRoot *pRoot, Corner *pCorner, Corner *pNew, bool makeOri
 	pNew->original = makeOriginal;
 	pNew->boundary = pRoot->boundary;
 	++pRoot->size;
+	pNew->pNextOrigin = pCorner->pNextOrigin;
+	pNew->pPrevOrigin = pCorner->original ? pCorner : pCorner->pPrevOrigin;
+	if (makeOriginal) {
+		pCorner->pNextOrigin = pNew;
+		pNew->pNextOrigin->pPrevOrigin = pNew;
+		++pRoot->originSize;
+	}
 	return err;
 }
 
@@ -393,6 +406,7 @@ Result handleXIntersect(
 
 static
 F32 getColinearAlpha(V2_F32 a, V2_F32 b, V2_F32 c) {
+	STUC_ASSERT("", _(a V2NOTEQL b));
 	V2_F32 ab = _(b V2SUB a);
 	V2_F32 ac = _(c V2SUB a);
 	//assuming here that a != b, degen edge check should have caught that prior
@@ -552,7 +566,8 @@ Result intersectHalfEdges(
 typedef enum Hand {
 	HAND_STRAIGHT,
 	HAND_LEFT,
-	HAND_RIGHT
+	HAND_RIGHT,
+	HAND_ON
 } Hand;
 
 typedef enum Neighbour {
@@ -729,70 +744,112 @@ Result inTestNoStartHandler(void *pUserData, FaceRoot *pRoot, Corner **ppStart) 
 	return STUC_SUCCESS;
 }
 
-//TODO this can fail if parallel edge is slightly off vertical.
-//improve
 static
-Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
+bool doesIntersectRay(V2_F32 rayA, V2_F32 rayB, V2_F32 c, V2_F32 d) {
+	F32 acd = getSignedArea(rayA, c, d);
+	F32 bcd = getSignedArea(rayB, c, d);
+	F32 divisor = acd - bcd;
+	if (_(divisor F32_EQL .0f)) {
+		return false;
+	}
+	return _(acd / divisor F32_GREATEQL .0f);
+	//F32 abAlpha = getColinearAlpha(a, b, point);
+	//F32 pointOnAB_Y = a.d[1] + ((b.d[1] - a.d[1]) * abAlpha);
+	//return _(pointOnAB_Y F32_GREATEQL point.d[1]);
+}
+
+static
+Result isPointInFace(
+	const StucAlloc *pAlloc,
+	I8Arr *pHandBuf,
+	Face *pFace,
+	V3_F32 point,
+	bool *pIn
+) {
 	Result err = STUC_SUCCESS;
-	typedef struct Delayed {
-		bool signFirst;
-		bool active;
-	} Delayed;
-	Delayed delayed = {0};
 	V2_F32 pointV2 = *(V2_F32 *)&point;
-	V3_F32 rayB = (V3_F32) {.d = {point.d[0], point.d[1] + 1.0f, .0f}};
-	V2_F32 rayNormal = v2F32LineNormal(_(*(V2_F32 *)&rayB V2SUB pointV2));
+	V2_F32 rayB = {.d = {point.d[0], point.d[1] + 1.0f}};
+	V2_F32 rayNormal = v2F32LineNormal(_(rayB V2SUB pointV2));
 	I32 windNum = 0;
 	FaceIter iter = {0};
-	faceIterInit(
-		pFace,
-		&pointV2, inTestStartPredicate, inTestNoStartHandler,
-		//NULL, NULL, NULL,
-		true,
-		&iter
-	);
-	for (; !faceIterSetCorner(&iter); faceIterInc(&iter)) {
-		if (!iter.pCorner) {
-			//skipping this boundary, all corners lie on ray
-			continue;
-		}
-		V3_F32 pos = iter.pCorner->pos;
-		V3_F32 posNext = iter.pCorner->pNextOrigin->pos;
-		F32 aRay = .0f;
-		//getIntersectAlpha snaps to 0 or 1 if within threshold, so not using epsilon
-		if (getIntersectAlpha(point, rayB, pos, posNext, &aRay) || aRay <= .0f) {
-			//lines are parallel, or intersection is outside ray
-			continue;
-		}
-		F32 aFaceEdge = .0f;
-		if (getIntersectAlpha(pos, posNext, point, rayB, &aFaceEdge)) {
-			continue;
-		}
-		if (aFaceEdge > .0f && aFaceEdge < 1.0f) {
-			++windNum;
-			continue;
-		}
-		if (aFaceEdge != .0f && aFaceEdge != 1.0f) {
-			continue;
-		}
-		const Corner *pNeighbour = aFaceEdge == .0f ?
-			iter.pCorner->pNextOrigin : iter.pCorner;
-		bool sign = _(
-			_(_(*(V2_F32 *)&pNeighbour->pos V2SUB pointV2) V2DOT rayNormal) F32_GREAT
-			.0f
-		);
-		if (!delayed.active) {
-			delayed.active = true;
-			delayed.signFirst = sign;
-		}
-		else {
-			if (_(sign F32_NOTEQL delayed.signFirst)) {
-				//delayed crossing
-				++windNum;
+	faceIterInit(pFace, NULL, NULL, NULL, true, &iter);
+	for (; !faceIterSetCorner(&iter); faceIterIncBoundary(&iter)) {
+		Corner *pCorner = iter.pCorner;
+		I32 size = pFace->pRoots[iter.boundary].originSize;
+		STUC_DYN_ARR_RESIZE(I8, pAlloc, pHandBuf, size);
+		I32 i = 0;
+		do {
+			STUC_RETURN_ERR_IFNOT_COND(err, i < size, "infinite or astray loop");
+			F32 sign = _(_(*(V2_F32 *)&pCorner->pos V2SUB pointV2) V2DOT rayNormal);
+			pHandBuf->pArr[i] = _(sign F32_EQL .0f) ? HAND_ON :
+				_(sign F32_GREAT .0f) ? HAND_RIGHT : HAND_LEFT; 
+		} while(++i, pCorner = pCorner->pNextOrigin, pCorner != iter.pStart);
+		typedef struct OverlapChain {
+			Hand hand;
+			bool active;
+			bool onRay;
+		} OverlapChain;
+		OverlapChain chain = {0};
+		Corner *pStart = NULL;
+		I32 iStart = 0;
+		do {
+			STUC_RETURN_ERR_IFNOT_COND(err, iStart < size, "infinite or astray loop");
+			if (pHandBuf->pArr[iStart] != HAND_ON) {
+				pStart = pCorner;
+				break;
 			}
-			//else delayed bounce
-			delayed.active = false;
+		} while(++iStart, pCorner = pCorner->pNextOrigin, pCorner != iter.pStart);
+		if (!pStart) {
+			continue;//face and ray are colinear - skip this boundary
 		}
+		i = 0;
+		do {
+			STUC_RETURN_ERR_IFNOT_COND(err, i < size, "infinite or astray loop");
+			I32 iOffset = (iStart + i) % size;
+			I32 iNext = (iOffset + 1) % size;
+			I32 iPrev = iOffset ? iOffset - 1 : size - 1;
+			bool nextIsOn = pHandBuf->pArr[iNext] == HAND_ON;
+			if (pHandBuf->pArr[iOffset] != HAND_ON) {
+				if (!nextIsOn && pHandBuf->pArr[iOffset] != pHandBuf->pArr[iNext] &&
+					(
+						_(pCorner->pos.d[1] F32_GREATEQL pointV2.d[1]) ||
+						_(pCorner->pNextOrigin->pos.d[1] F32_GREATEQL pointV2.d[1])
+					) &&
+					doesIntersectRay(
+						pointV2, rayB,
+						*(V2_F32 *)&pCorner->pos, *(V2_F32 *)&pCorner->pNextOrigin->pos
+				)) {
+					++windNum;
+				}
+				continue;
+			}
+			bool prevIsOn = pHandBuf->pArr[iPrev] == HAND_ON;
+			if (prevIsOn && nextIsOn) {
+				continue;
+			}
+			bool onRay = _(pCorner->pos.d[1] F32_GREATEQL pointV2.d[1]);
+			if (!prevIsOn && !nextIsOn) {
+				if (onRay && pHandBuf->pArr[iPrev] != pHandBuf->pArr[iNext]) {
+					++windNum;
+				}
+				//else below point or bounce
+				continue;
+			}
+			I32 notOn = prevIsOn ? iNext : iPrev;
+			if (chain.active) {
+				if (onRay && chain.onRay && chain.hand != pHandBuf->pArr[notOn]) {
+					//delayed crossing
+					++windNum;
+				}
+				//else delayed bounce, or delayed crossing that's not above point
+				chain.active = false;
+			}
+			else {
+				chain.active = true;
+				chain.hand = pHandBuf->pArr[notOn];
+				chain.onRay = onRay;
+			}
+		} while(++i, pCorner = pCorner->pNextOrigin, pCorner != pStart);
 	}
 	err = faceIterGetErr(&iter);
 	STUC_RETURN_ERR_IFNOT(err, "")
@@ -800,7 +857,11 @@ Result isPointInFace(Face *pFace, V3_F32 point, bool *pIn) {
 	return err;
 }
 
+		//getIntersectAlpha snaps to 0 or 1 if within threshold, so not using epsilon
+
 typedef struct LabelIterArgs {
+	const StucAlloc *pAlloc;
+	I8Arr *pHandBuf;
 	LinAlloc *pCornerAlloc;
 	Face *pFaceB;
 	bool *pIn;
@@ -816,7 +877,13 @@ Result labelIterStartPredicate(void *pUserData, const Corner *pCorner, bool *pVa
 	}
 	*pValid = true;
 	LabelIterArgs *pArgs = pUserData;
-	err = isPointInFace(pArgs->pFaceB, pCorner->pos, pArgs->pIn);
+	err = isPointInFace(
+		pArgs->pAlloc,
+		pArgs->pHandBuf,
+		pArgs->pFaceB,
+		pCorner->pos,
+		pArgs->pIn
+	);
 	STUC_RETURN_ERR_IFNOT(err, "");
 	return err;
 }
@@ -868,12 +935,19 @@ bool isCornerDelayed(const Corner *pCorner) {
 }
 
 static
-Result labelCrossDir(LinAlloc *pCornerAlloc, Face *pFaceA, Face *pFaceB) {
+Result labelCrossDir(
+	const StucAlloc *pAlloc,
+	I8Arr *pHandBuf,
+	LinAlloc *pCornerAlloc,
+	Face *pFaceA, Face *pFaceB
+) {
 	Result err = STUC_SUCCESS;
 	Corner *pStart = NULL;
 	bool in = false;
 	bool commonEdges = false;
 	LabelIterArgs labelIterArgs = {
+		.pAlloc = pAlloc,
+		.pHandBuf = pHandBuf,
 		.pCornerAlloc = pCornerAlloc,
 		.pFaceB = pFaceB,
 		.pIn = &in,
@@ -1023,19 +1097,7 @@ I32 beginFace(
 	const Corner *pStart
 ) {
 	I32 newIdx = -1;
-	//TODO use alloc in STUC_DYN_ARR_ADD instead of basic,
-	//then replace this with that
-	STUC_ASSERT("", pArr->count <= pArr->size);
-	if (!pArr->size) {
-		pArr->size = 4;
-		pArr->pArr = pAlloc->fpMalloc(pArr->size * sizeof(ClipFaceRoot));
-	}
-	else if (pArr->count == pArr->size) {
-		pArr->size *= 2;
-		pArr->pArr = pAlloc->fpRealloc(pArr->pArr, pArr->size * sizeof(ClipFaceRoot));
-	}
-	newIdx = pArr->count;
-	pArr->count++;
+	STUC_DYN_ARR_ADD(ClipFaceRoot, pAlloc, pArr, newIdx);
 	pArr->pArr[newIdx] = (ClipFaceRoot) {0};
 	return newIdx;
 }
@@ -1210,10 +1272,16 @@ Result stucClip(
 
 	err = labelCrossOrBounce(&subj);
 	STUC_THROW_IFNOT(err, "", 0);
-	err = labelCrossDir(&cornerAlloc, &subj, &clip);
-	STUC_THROW_IFNOT(err, "", 0);
-	err = labelCrossDir(&cornerAlloc, &clip, &subj);
-	STUC_THROW_IFNOT(err, "", 0);
+	{
+		I8Arr handBuf = {0};
+		err = labelCrossDir(pAlloc, &handBuf, &cornerAlloc, &subj, &clip);
+		STUC_THROW_IFNOT(err, "", 0);
+		err = labelCrossDir(pAlloc, &handBuf, &cornerAlloc, &clip, &subj);
+		STUC_THROW_IFNOT(err, "", 0);
+		if (handBuf.pArr) {
+			pAlloc->fpFree(handBuf.pArr);
+		}
+	}
 
 	err = processCandidates(&subj);
 	STUC_THROW_IFNOT(err, "", 0);
