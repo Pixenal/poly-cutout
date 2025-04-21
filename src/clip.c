@@ -26,10 +26,7 @@ typedef enum CrossDir {
 	CROSS_EXIT
 } CrossDir;
 
-typedef enum ClipOrSubj {
-	FACE_CLIP,
-	FACE_SUBJECT
-} ClipOrSubj;
+typedef ClipFaceIntern Face;
 
 typedef struct Corner {
 	struct Corner *pNext;
@@ -47,24 +44,8 @@ typedef struct Corner {
 	bool checked;
 	bool original;
 	bool cross;
+	bool dontAdd;
 } Corner;
-
-typedef struct Funcs {
-	V2_F32 (* getClipPos)(const void *, const void *, I32, I32);
-	V3_F32 (* getSubjPos)(const void *, const void *, I32, I32);
-} Funcs;
-
-typedef struct FaceRoot {
-	Corner *pRoot;
-	I32 size;
-	I32 originSize;
-	I32 boundary;
-} FaceRoot;
-
-typedef struct Face {
-	FaceRoot *pRoots;
-	I32 boundaries;
-} Face;
 
 typedef struct FaceIter {
 	void *pUserData;
@@ -230,63 +211,6 @@ Result faceIterGetErr(const FaceIter *pIter) {
 }
 
 static
-V3_F32 callGetClipPos(
-	const void *pUserData,
-	const void *pMesh,
-	const Funcs *pFuncs,
-	I32 boundary,
-	I32 corner
-) {
-	V2_F32 pos = pFuncs->getClipPos(pUserData, pMesh, boundary, corner);
-	return (V3_F32) {.d = {pos.d[0], pos.d[1], .0f}};
-}
-
-static
-V3_F32 callGetSubjPos(
-	const void *pUserData,
-	const void *pMesh,
-	const Funcs *pFuncs,
-	I32 boundary,
-	I32 corner
-) {
-	return pFuncs->getSubjPos(pUserData, pMesh, boundary, corner);
-}
-
-static
-void cornerListInit(
-	LinAlloc *pRootAlloc,
-	LinAlloc *pCornerAlloc,
-	const void *pUserData,
-	const void *pMesh, ClipInput inputFace,
-	V3_F32 (* getPos)(const void *, const void *, const Funcs *, I32, I32),
-	const Funcs *pFuncs,
-	Face *pFace,
-	ClipOrSubj face
-) {
-	pFace->boundaries = inputFace.boundaries;
-	stucLinAlloc(pRootAlloc, &pFace->pRoots, pFace->boundaries);
-	for (I32 i = 0; i < inputFace.boundaries; ++i) {
-		pFace->pRoots[i].size = inputFace.pSizes[i];
-		pFace->pRoots[i].originSize = pFace->pRoots[i].size;
-		pFace->pRoots[i].boundary = i;
-		stucLinAlloc(pCornerAlloc, &pFace->pRoots[i].pRoot, inputFace.pSizes[i]);
-		for (I32 j = 0; j < inputFace.pSizes[i]; ++j) {
-			Corner *pCorner = pFace->pRoots[i].pRoot + j;
-			I32 jNext = (j + 1) % pFace->pRoots[i].size;
-			I32 jPrev = j ? j - 1 : pFace->pRoots[i].size - 1;
-			pCorner->pNext = pFace->pRoots[i].pRoot + jNext;
-			pCorner->pPrev = pFace->pRoots[i].pRoot + jPrev;
-			pCorner->pNextOrigin = pCorner->pNext;
-			pCorner->pPrevOrigin = pCorner->pPrev;
-			pCorner->boundary = i;
-			pCorner->original = true;
-			pCorner->face = face;
-			pCorner->pos = getPos(pUserData, pMesh, pFuncs, i, j);
-		}
-	}
-}
-
-static
 F32 getSignedArea(V2_F32 a, V2_F32 b, V2_F32 c) {
 	return _(_(b V2SUB a) V2CROSS _(c V2SUB a));
 }
@@ -341,14 +265,17 @@ Result insertCorner(FaceRoot *pRoot, Corner *pCorner, Corner *pNew, bool makeOri
 			);
 		}
 	}
-	pNew->face = pCorner->face;
 	pNew->pNext = pCorner->pNext;
 	pCorner->pNext = pNew;
 	pNew->pNext->pPrev = pNew;
 	pNew->pPrev = pCorner;
+
+	pNew->face = pCorner->face;
 	pNew->original = makeOriginal;
 	pNew->boundary = pRoot->boundary;
+	pNew->originCorner = pCorner->originCorner;
 	++pRoot->size;
+
 	pNew->pNextOrigin = pCorner->pNextOrigin;
 	pNew->pPrevOrigin = pCorner->original ? pCorner : pCorner->pPrevOrigin;
 	if (makeOriginal) {
@@ -922,6 +849,7 @@ Result labelIterHandleNoStart(void *pUserData, FaceRoot *pRoot, Corner **ppStart
 	Corner *pNew = NULL;
 	stucLinAlloc(pArgs->pCornerAlloc, &pNew, 1);
 	pNew->pos = midPoint;
+	pNew->dontAdd = true;
 	insertCorner(pRoot, pA, pNew, true);
 	*ppStart = pNew;
 	return err;
@@ -1029,11 +957,19 @@ Result getFirstClipEntry(FaceIter *pIter, Corner **ppStart) {
 }
 
 static
+ClipCornerIdx makeClipCornerIdx(const Corner *pCorner) {
+	return (ClipCornerIdx) {
+		.corner = pCorner->originCorner,
+		.boundary = pCorner->boundary
+	};
+}
+
+static
 void setOutCornerInfo(ClipCorner *pOut, const Corner *pCorner) {
 	bool inClip = pCorner->face == FACE_CLIP;
 	if (!pCorner->pLink) {
 		pOut->type = inClip ? CLIP_ORIGIN_CLIP : CLIP_ORIGIN_SUBJECT;
-		pOut->info.origin.corner = pCorner->originCorner;
+		pOut->info.origin.corner = makeClipCornerIdx(pCorner);
 		return;
 	}
 	const Corner *pClip = inClip ? pCorner : pCorner->pLink;
@@ -1041,8 +977,8 @@ void setOutCornerInfo(ClipCorner *pOut, const Corner *pCorner) {
 	switch (pCorner->label) {
 		case LABEL_CROSS:
 			pOut->type = CLIP_INTERSECT;
-			pOut->info.intersect.clipCorner = pClip->originCorner;
-			pOut->info.intersect.subjCorner = pSubj->originCorner;
+			pOut->info.intersect.clipCorner = makeClipCornerIdx(pClip);
+			pOut->info.intersect.subjCorner = makeClipCornerIdx(pSubj);
 			pOut->info.intersect.clipAlpha = pClip->alpha;
 			pOut->info.intersect.subjAlpha = pSubj->alpha;
 			break;
@@ -1053,15 +989,15 @@ void setOutCornerInfo(ClipCorner *pOut, const Corner *pCorner) {
 		case LABEL_BOUNCE_DELAYED:
 			if (pCorner->original && pCorner->pLink->original) {
 				pOut->type = CLIP_ON_VERT;
-				pOut->info.onVert.clipCorner = pClip->originCorner;
-				pOut->info.onVert.subjCorner = pSubj->originCorner;
+				pOut->info.onVert.clipCorner = makeClipCornerIdx(pClip);
+				pOut->info.onVert.subjCorner = makeClipCornerIdx(pSubj);
 			}
 			else {
 				const Corner *pVert = pCorner->original ? pCorner : pCorner->pLink;
 				pOut->type = pVert->face == FACE_CLIP ?
 					CLIP_ON_SUBJECT_EDGE : CLIP_ON_CLIP_EDGE;
-				pOut->info.onEdge.vertCorner = pVert->originCorner;
-				pOut->info.onEdge.edgeCorner = pVert->pLink->originCorner;
+				pOut->info.onEdge.vertCorner = makeClipCornerIdx(pVert);
+				pOut->info.onEdge.edgeCorner = makeClipCornerIdx(pVert->pLink);
 				pOut->info.onEdge.alpha = pVert->pLink->alpha;
 			}
 			break;
@@ -1072,6 +1008,9 @@ void setOutCornerInfo(ClipCorner *pOut, const Corner *pCorner) {
 
 static
 void addCorner(ClipFaceArr *pArr, I32 face, const Corner *pCorner) {
+	if (pCorner->dontAdd) {
+		return;
+	}
 	ClipCorner *pNew = NULL;
 	stucLinAlloc(&pArr->cornerAlloc, &pNew, 1);
 	pNew->pos = pCorner->pos;
@@ -1212,53 +1151,23 @@ Result processCandidates(Face *pSubj) {
 	return err;
 }
 
-Result stucClip(
+stucClipIntern(
 	const StucAlloc *pAlloc,
-	const void *pUserData,
-	const void *pClipMesh, ClipInput clipInput,
-	V2_F32 (* clipGetPos)(const void *, const void *, I32, I32),
-	const void *pSubjMesh, ClipInput subjInput,
-	V3_F32 (* subjGetPos)(const void *, const void *, I32, I32),
+	LinAlloc *pCornerAlloc,
+	I32 initSize,
+	Face *pClip, Face *pSubj,
 	ClipFaceArr *pOut
 ) {
-	//subject abbreviated to subj
 	Result err = STUC_SUCCESS;
-	Funcs funcs = {.getClipPos = clipGetPos, .getSubjPos = subjGetPos};
-	LinAlloc rootAlloc = {0};
-	LinAlloc cornerAlloc = {0};
-	{
-		I32 rootCount = clipInput.boundaries + subjInput.boundaries;
-		stucLinAllocInit(pAlloc, &rootAlloc, sizeof(FaceRoot), rootCount, true);
-	}
-	I32 initSize = getFaceInputSize(clipInput) + getFaceInputSize(subjInput);
-	stucLinAllocInit(pAlloc, &cornerAlloc, sizeof(Corner), initSize, true);
-	Face clip = {0};
-	Face subj = {0};
-	cornerListInit(
-		&rootAlloc, &cornerAlloc,
-		pUserData,
-		pClipMesh, clipInput,
-		callGetClipPos, &funcs,
-		&clip,
-		FACE_CLIP
-	);
-	cornerListInit(
-		&rootAlloc, &cornerAlloc,
-		pUserData,
-		pSubjMesh, subjInput,
-		callGetSubjPos, &funcs,
-		&subj,
-		FACE_SUBJECT
-	);
 	//find intersections
 	FaceIter clipIter = {0};
-	faceIterInit(&clip, NULL, NULL, NULL, true, &clipIter);
+	faceIterInit(pClip, NULL, NULL, NULL, true, &clipIter);
 	for (; !faceIterSetCorner(&clipIter); faceIterInc(&clipIter)) {
 		FaceIter subjIter = {0};
-		faceIterInit(&subj, NULL, NULL, NULL, true, &subjIter);
+		faceIterInit(pSubj, NULL, NULL, NULL, true, &subjIter);
 		for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
 			err = intersectHalfEdges(
-				&cornerAlloc,
+				pCornerAlloc,
 				faceIterGetRoot(&clipIter), faceIterGetRoot(&subjIter),
 				clipIter.pCorner, subjIter.pCorner 
 			);
@@ -1270,30 +1179,64 @@ Result stucClip(
 	err = faceIterGetErr(&clipIter);
 	STUC_RETURN_ERR_IFNOT(err, "");
 
-	err = labelCrossOrBounce(&subj);
+	err = labelCrossOrBounce(pSubj);
 	STUC_THROW_IFNOT(err, "", 0);
 	{
 		I8Arr handBuf = {0};
-		err = labelCrossDir(pAlloc, &handBuf, &cornerAlloc, &subj, &clip);
-		STUC_THROW_IFNOT(err, "", 0);
-		err = labelCrossDir(pAlloc, &handBuf, &cornerAlloc, &clip, &subj);
-		STUC_THROW_IFNOT(err, "", 0);
+		err = labelCrossDir(pAlloc, &handBuf, pCornerAlloc, pSubj, pClip);
+		STUC_THROW_IFNOT(err, "", 1);
+		err = labelCrossDir(pAlloc, &handBuf, pCornerAlloc, pClip, pSubj);
+		STUC_THROW_IFNOT(err, "", 1);
+		STUC_CATCH(1, err, ;)
 		if (handBuf.pArr) {
 			pAlloc->fpFree(handBuf.pArr);
 		}
+		STUC_THROW_IFNOT(err, "", 0);
 	}
 
-	err = processCandidates(&subj);
+	err = processCandidates(pSubj);
 	STUC_THROW_IFNOT(err, "", 0);
 
 	*pOut = (ClipFaceArr) {0};
 	stucLinAllocInit(pAlloc, &pOut->cornerAlloc, sizeof(ClipCorner), initSize, true);
-	err = makeClippedFaces(pAlloc, &clip, &subj, pOut);
+	err = makeClippedFaces(pAlloc, pClip, pSubj, pOut);
 	STUC_THROW_IFNOT(err, "", 0);
 	STUC_CATCH(0, err, ;);
-	stucLinAllocDestroy(&rootAlloc);
-	stucLinAllocDestroy(&cornerAlloc);
 	return err;
+}
+
+stucClipInitMem(
+	const StucAlloc *pAlloc,
+	ClipInput clipInput, ClipInput subjInput,
+	LinAlloc *pRootAlloc,
+	LinAlloc *pCornerAlloc,
+	I32 *pInitSize
+) {
+	I32 rootCount = clipInput.boundaries + subjInput.boundaries;
+	stucLinAllocInit(pAlloc, pRootAlloc, sizeof(FaceRoot), rootCount, true);
+	*pInitSize = getFaceInputSize(clipInput) + getFaceInputSize(subjInput);
+	stucLinAllocInit(pAlloc, pCornerAlloc, sizeof(Corner), *pInitSize, true);
+}
+
+stucClipInitCorner(
+	Face *pFace,
+	I32 boundary,
+	I32 corner,
+	ClipOrSubj face,
+	V3_F32 pos
+) {
+	I32 jNext = (corner + 1) % pFace->pRoots[boundary].size;
+	I32 jPrev = corner ? corner - 1 : pFace->pRoots[boundary].size - 1;
+	Corner *pCorner = pFace->pRoots[boundary].pRoot + corner;
+	pCorner->pNext = pFace->pRoots[boundary].pRoot + jNext;
+	pCorner->pPrev = pFace->pRoots[boundary].pRoot + jPrev;
+	pCorner->pNextOrigin = pCorner->pNext;
+	pCorner->pPrevOrigin = pCorner->pPrev;
+	pCorner->boundary = boundary;
+	pCorner->originCorner = corner;
+	pCorner->original = true;
+	pCorner->face = face;
+	pCorner->pos = pos;
 }
 
 void stucClipFaceArrDestroy(const StucAlloc *pAlloc, ClipFaceArr *pArr) {
