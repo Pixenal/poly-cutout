@@ -1,8 +1,8 @@
 #include <float.h>
 #include <math.h>
 
-#include <clip.h>
-#include <math_utils.h>
+#include <poly_cutout.h>
+#include <pixenals_math_utils.h>
 
 typedef int8_t I8;
 typedef int16_t I16;
@@ -1181,7 +1181,7 @@ PixErr processCandidates(FaceIntern *pSubj) {
 	return err;
 }
 
-plycutClipIntern(
+PixErr plycutClipIntern(
 	const PixalcFPtrs *pAlloc,
 	PixalcLinAlloc *pCornerAlloc,
 	I32 initSize,
@@ -1235,7 +1235,7 @@ plycutClipIntern(
 	return err;
 }
 
-plycutClipInitMem(
+void plycutClipInitMem(
 	const PixalcFPtrs *pAlloc,
 	PlycutInput clipInput, PlycutInput subjInput,
 	PixalcLinAlloc *pRootAlloc,
@@ -1248,7 +1248,7 @@ plycutClipInitMem(
 	pixalcLinAllocInit(pAlloc, pCornerAlloc, sizeof(Corner), *pInitSize, true);
 }
 
-plycutClipInitCorner(
+void plycutClipInitCorner(
 	FaceIntern *pFace,
 	I32 boundary,
 	I32 corner,

@@ -1,11 +1,11 @@
 #pragma once
 
-#include "alloc.h"
+#include <pixenals_alloc_utils.h>
 
 #ifdef WIN32
-#define PCUT_FORCE_INLINE __forceinline
+#define PLYCUT_FORCE_INLINE __forceinline
 #else
-#define PCUT_FORCE_INLINE __attribute__((always_inline)) static inline
+#define PLYCUT_FORCE_INLINE __attribute__((always_inline)) static inline
 #endif
 
 typedef PixtyV2_F32 PlycutV2_F32;
@@ -101,7 +101,7 @@ typedef enum PlycutClipOrSubj {
 	PCUT_FACE_SUBJECT
 } PlycutClipOrSubj;
 
-plycutClipIntern(
+PlycutErr plycutClipIntern(
 	const PlycutAlloc *pAlloc,
 	PixalcLinAlloc *pCornerAlloc,
 	int32_t initSize,
@@ -109,7 +109,7 @@ plycutClipIntern(
 	PlycutFaceArr *pOut
 );
 
-plycutClipInitMem(
+void plycutClipInitMem(
 	const PlycutAlloc *pAlloc,
 	PlycutInput clipInput, PlycutInput subjInput,
 	PixalcLinAlloc *pRootAlloc,
@@ -117,7 +117,7 @@ plycutClipInitMem(
 	int32_t *pInitSize
 );
 
-plycutClipInitCorner(
+void plycutClipInitCorner(
 	PlycutFaceIntern *pFace,
 	int32_t boundary,
 	int32_t corner,
@@ -130,7 +130,7 @@ typedef struct PlycutClipFuncs {
 	PlycutV3_F32 (* getSubjPos)(const void *, const void *, PlycutInput, int32_t, int32_t);
 } PlycutClipFuncs;
 
-PCUT_FORCE_INLINE
+PLYCUT_FORCE_INLINE
 PlycutV3_F32 plycutCallGetClipPos(
 	const void *pUserData,
 	const void *pMesh,
@@ -143,7 +143,7 @@ PlycutV3_F32 plycutCallGetClipPos(
 	return (PlycutV3_F32) {.d = {pos.d[0], pos.d[1], .0f}};
 }
 
-PCUT_FORCE_INLINE
+PLYCUT_FORCE_INLINE
 PlycutV3_F32 plycutCallGetSubjPos(
 	const void *pUserData,
 	const void *pMesh,
@@ -155,7 +155,7 @@ PlycutV3_F32 plycutCallGetSubjPos(
 	return pFuncs->getSubjPos(pUserData, pMesh, inputFace, boundary, corner);
 }
 
-PCUT_FORCE_INLINE
+PLYCUT_FORCE_INLINE
 void plycutCornerListInit(
 	PixalcLinAlloc *pRootAlloc,
 	PixalcLinAlloc *pCornerAlloc,
@@ -167,12 +167,12 @@ void plycutCornerListInit(
 	PlycutClipOrSubj face
 ) {
 	pFace->boundaries = inputFace.boundaries;
-	pixalcLinAlloc(pRootAlloc, &pFace->pRoots, pFace->boundaries);
+	pixalcLinAlloc(pRootAlloc, (void **)&pFace->pRoots, pFace->boundaries);
 	for (int32_t i = 0; i < inputFace.boundaries; ++i) {
 		pFace->pRoots[i].size = inputFace.pSizes[i];
 		pFace->pRoots[i].originSize = pFace->pRoots[i].size;
 		pFace->pRoots[i].boundary = i;
-		pixalcLinAlloc(pCornerAlloc, &pFace->pRoots[i].pRoot, inputFace.pSizes[i]);
+		pixalcLinAlloc(pCornerAlloc, (void **)&pFace->pRoots[i].pRoot, inputFace.pSizes[i]);
 		for (int32_t j = 0; j < inputFace.pSizes[i]; ++j) {
 			PlycutV3_F32 pos = getPos(pUserData, pMesh, pFuncs, inputFace, i, j);
 			plycutClipInitCorner(pFace, i, j, face, pos);
