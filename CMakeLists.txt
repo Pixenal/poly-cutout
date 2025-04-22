@@ -1,0 +1,55 @@
+# SPDX-FileCopyrightText: 2025 Caleb Dawson
+# SPDX-License-Identifier: Apache-2.0
+
+cmake_minimum_required(VERSION 3.5)
+set(PROJECT PolyCutout)
+project(${PROJECT})
+get_property(IS_MULTI_CONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if (NOT IS_MULTI_CONFIG)
+	message("Building for single build type")
+	if (NOT CMAKE_BUILD_TYPE)
+		message("No build type specified, building Release")
+		set(CMAKE_BUILD_TYPE Release "" FORCE)
+	endif()
+endif ()
+if (UNIX)
+	message("Building for Unix")
+	set(CMAKE_C_FLAGS "")
+	if (CMAKE_BUILD_TYPE MATCHES DEBUG)
+		message("Debug build")
+		set(CMAKE_C_FLAGS  "-g -O0 -DEBUG -pthread -Wshadow -Wunused -Wno-unused-label -fPIC")
+	endif()
+	if (CMAKE_BUILD_TYPE MATCHES RELEASE)
+		message("Release build")
+		set(CMAKE_C_FLAGS  "-ftree-vectorize -mavx2 -finline-functions -O2 -pthread -fPIC")
+	endif()
+endif()
+if (WIN32)
+	message("Building for Windows")
+	message("CMAKE_MSVC_RUNTIME_LIB is "${CMAKE_MSVC_RUNTIME_LIBRARY})
+	set(CMAKE_C_FLAGS "/D WIN32 /TC")
+	set(CMAKE_C_FLAGS_RELEASE "/O2")
+	set(CMAKE_C_STANDARD 11)
+endif()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+add_library(${PROJECT} STATIC src/poly_cutout.c)
+option(
+	PLYCUT_PIX_PATH
+	"Override the path to the folder containing pixenals-* libraries (set to extern by default)"
+	"extern"
+)
+message("PLYCUT_PIX_PATH is "${PLYCUT_PIX_PATH})
+set(PLYCUT_PIX_ALLOC "" ${PLYCUT_PIX_PATH}/pixenals-alloc-utils)
+set(PLYCUT_PIX_MATH "" ${PLYCUT_PIX_PATH}/pixenals-math-utils)
+if (NOT TARGET PixenalsAllocUtils)
+	add_subdirectory(${PLYCUT_PIX_ALLOC} ${PLYCUT_PIX_ALLOC})
+endif()
+if (NOT TARGET PixenalsMathUtils)
+	add_subdirectory(${PLYCUT_PIX_MATH} ${PLYCUT_PIX_MATH})
+endif()
+target_link_libraries(${PROJECT} PRIVATE PixenalsAllocUtils PixenalsMathUtils)
+target_include_directories(${PROJECT} PRIVATE include)
+target_include_directories(${PROJECT} PUBLIC
+	${PLYCUT_PIX_PATH}/pixenals-types/include ${PLYCUT_PIX_PATH}/pixenals-error-utils/include
+	${PLYCUT_PIX_ALLOC}/include ${PLYCUT_PIX_MATH}/include
+)
