@@ -8,6 +8,10 @@
 #define PLYCUT_FORCE_INLINE __attribute__((always_inline)) static inline
 #endif
 
+#ifndef PLYCUT_SNAP_THRESHOLD
+	#define PLYCUT_SNAP_THRESHOLD .00005f
+#endif
+
 typedef PixtyV2_F32 PlycutV2_F32;
 typedef PixtyV3_F32 PlycutV3_F32;
 typedef PixalcFPtrs PlycutAlloc;

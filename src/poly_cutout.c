@@ -33,9 +33,6 @@ typedef PixtyI8Arr I8Arr;
 typedef PlycutFaceRootIntern FaceRootIntern;
 typedef PlycutFaceIntern FaceIntern;
 
-
-#define SNAP_THRESHOLD .0001f
-
 typedef enum Label {
 	LABEL_NONE,
 	LABEL_CROSS,
@@ -253,11 +250,11 @@ I32 getIntersectAlpha(V3_F32 a, V3_F32 b, V3_F32 c, V3_F32 d, F32 *pAlpha) {
 	F32 cdLen = pixmV2F32Len(_(*(V2_F32 *)&d V2SUB *(V2_F32 *)&c));
 	F32 hAcd = acd / cdLen;
 	F32 hBcd = bcd / cdLen;
-	bool aIsOnCd = _(fabsf(hAcd) F32_LESS SNAP_THRESHOLD);
-	bool bIsOnCd = _(fabsf(hBcd) F32_LESS SNAP_THRESHOLD);
+	bool aIsOnCd = _(fabsf(hAcd) F32_LESS PLYCUT_SNAP_THRESHOLD);
+	bool bIsOnCd = _(fabsf(hBcd) F32_LESS PLYCUT_SNAP_THRESHOLD);
 	bool colinear = aIsOnCd && bIsOnCd;
 	F32 diff = fabsf(hAcd - hBcd);
-	if (colinear || _(diff F32_LESS SNAP_THRESHOLD)) {
+	if (colinear || _(diff F32_LESS PLYCUT_SNAP_THRESHOLD)) {
 		return colinear ? 2 : 1;
 	}
 	if (aIsOnCd) {
@@ -371,10 +368,10 @@ F32 getColinearAlpha(V2_F32 a, V2_F32 b, V2_F32 c) {
 	//assuming here that a != b, degen edge check should have caught that prior
 	F32 alpha =  _(ac V2DOT ab) / _(ab V2DOT ab);
 	F32 abLen = pixmV2F32Len(ab);
-	if (_(fabsf(alpha * abLen) F32_LESS SNAP_THRESHOLD)) {
+	if (_(fabsf(alpha * abLen) F32_LESS PLYCUT_SNAP_THRESHOLD)) {
 		alpha = .0f;
 	}
-	else if (_(fabsf((1.0f - alpha) * abLen) F32_LESS SNAP_THRESHOLD)) {
+	else if (_(fabsf((1.0f - alpha) * abLen) F32_LESS PLYCUT_SNAP_THRESHOLD)) {
 		alpha = 1.0f;
 	}
 	return alpha;
@@ -420,7 +417,7 @@ PixErr insertIntersect(
 		//V intersection
 		V2_F32 ab = _(*(V2_F32 *)&pClip->pos V2SUB *(V2_F32 *)&pSubj->pos);
 		F32 len = pixmV2F32Len(ab);
-		if (_(len F32_LESS SNAP_THRESHOLD)) {
+		if (_(len F32_LESS PLYCUT_SNAP_THRESHOLD)) {
 			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
 			linkCorners(pClip, pSubj);
 		}
@@ -697,7 +694,7 @@ PixErr labelCrossOrBounce(FaceIntern *pSubjFace) {
 static
 PixErr inTestStartPredicate(void *pUserData, const Corner *pCorner, bool *pValid) {
 	F32 diff = pCorner->pos.d[0] - ((V2_F32 *)pUserData)->d[0];
-	*pValid = _(fabsf(diff) F32_GREAT SNAP_THRESHOLD * 4.0f);
+	*pValid = _(fabsf(diff) F32_GREAT PLYCUT_SNAP_THRESHOLD * 4.0f);
 	return PIX_ERR_SUCCESS;
 }
 
