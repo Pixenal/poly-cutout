@@ -15,12 +15,6 @@ typedef uint32_t U32;
 typedef uint64_t U64;
 
 typedef float F32;
-typedef double F64;
-
-typedef uint8_t UBitField8;
-typedef uint16_t UBitField16;
-typedef uint32_t UBitField32;
-typedef uint64_t UBitField64;
 
 typedef PixtyV2_F32 V2_F32;
 typedef PixtyV3_F32 V3_F32;
@@ -999,7 +993,7 @@ PlycutCornerIdx makeClipCornerIdx(const Corner *pCorner) {
 
 static
 void setOutCornerInfo(PlycutCorner *pOut, const Corner *pCorner) {
-	bool inClip = pCorner->face == PCUT_FACE_CLIP;
+	bool inClip = pCorner->face == PLYCUT_FACE_CLIP;
 	if (!pCorner->pLink) {
 		pOut->type = inClip ? PLYCUT_ORIGIN_CLIP : PLYCUT_ORIGIN_SUBJECT;
 		pOut->info.origin.corner = makeClipCornerIdx(pCorner);
@@ -1027,7 +1021,7 @@ void setOutCornerInfo(PlycutCorner *pOut, const Corner *pCorner) {
 			}
 			else {
 				const Corner *pVert = pCorner->original ? pCorner : pCorner->pLink;
-				pOut->type = pVert->face == PCUT_FACE_CLIP ?
+				pOut->type = pVert->face == PLYCUT_FACE_CLIP ?
 					PLYCUT_ON_SUBJECT_EDGE : PLYCUT_ON_CLIP_EDGE;
 				pOut->info.onEdge.vertCorner = makeClipCornerIdx(pVert);
 				pOut->info.onEdge.edgeCorner = makeClipCornerIdx(pVert->pLink);

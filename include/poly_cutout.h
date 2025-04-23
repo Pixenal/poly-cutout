@@ -101,8 +101,8 @@ typedef struct PlycutFaceIntern {
 } PlycutFaceIntern;
 
 typedef enum PlycutClipOrSubj {
-	PCUT_FACE_CLIP,
-	PCUT_FACE_SUBJECT
+	PLYCUT_FACE_CLIP,
+	PLYCUT_FACE_SUBJECT
 } PlycutClipOrSubj;
 
 PlycutErr plycutClipIntern(
@@ -209,7 +209,7 @@ PlycutErr plycutClip(
 		pClipMesh, clipInput,
 		plycutCallGetClipPos, &funcs,
 		&clip,
-		PCUT_FACE_CLIP
+		PLYCUT_FACE_CLIP
 	);
 	plycutCornerListInit(
 		&rootAlloc, &cornerAlloc,
@@ -217,7 +217,7 @@ PlycutErr plycutClip(
 		pSubjMesh, subjInput,
 		plycutCallGetSubjPos, &funcs,
 		&subj,
-		PCUT_FACE_SUBJECT
+		PLYCUT_FACE_SUBJECT
 	);
 	err = plycutClipIntern(pAlloc, &cornerAlloc, initSize, &clip, &subj, pOut);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
