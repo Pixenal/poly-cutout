@@ -92,7 +92,11 @@ typedef struct PlycutFaceRootIntern {
 	struct PlycutCornerIntern *pRoot;
 	int32_t size;
 	int32_t originSize;
+	int32_t crossCount;
 	int32_t boundary;
+	bool commonEdges;
+	bool skip;
+	bool in;
 } PlycutFaceRootIntern;
 
 typedef struct PlycutFaceIntern {

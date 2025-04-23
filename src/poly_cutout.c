@@ -75,6 +75,7 @@ typedef struct FaceIter {
 	Corner *pStart;
 	PixErr (* fpStartPredicate)(void *, const Corner *, bool *);
 	PixErr (* fpHandleNoStart)(void *, FaceRootIntern *, Corner **);
+	PixErr (* fpBoundaryPredicate)(void *, const FaceRootIntern *, bool *);
 	I32 boundary;
 	I32 corner;
 	I32 count;
@@ -89,6 +90,7 @@ void faceIterInit(
 	void *pUserData,
 	PixErr (* fpStartPredicate)(void *, const Corner *, bool *),
 	PixErr (* fpHandleNoStart)(void *, FaceRootIntern *, Corner **),
+	PixErr (* fpBoundaryPredicate)(void *, const FaceRootIntern *, bool *),
 	bool originOnly,
 	FaceIter *pIter
 	) {
@@ -98,6 +100,7 @@ void faceIterInit(
 		.err = PIX_ERR_SUCCESS,
 		.fpStartPredicate = fpStartPredicate,
 		.fpHandleNoStart = fpHandleNoStart,
+		.fpBoundaryPredicate = fpBoundaryPredicate,
 		.originOnly = originOnly
 	};
 }
@@ -118,8 +121,8 @@ I32 faceIterInternGetSize(const FaceIter *pIter) {
 static
 PixErr faceIterInternFindValidStart(FaceIter *pIter) {
 	PixErr err = PIX_ERR_SUCCESS;
-	I32 i = 0;
 	bool valid = false;
+	I32 i = 0;
 	I32 size = faceIterInternGetSize(pIter);
 	while (
 		err = pIter->fpStartPredicate(pIter->pUserData, pIter->pCorner, &valid),
@@ -145,8 +148,6 @@ PixErr faceIterInternFindValidStart(FaceIter *pIter) {
 					"'no start' handler gave start corner that doesn't pass predicate",
 					valid
 				);
-			}
-			if (!valid) {
 			}
 			return err;
 		}
@@ -177,7 +178,19 @@ bool faceIterSetCorner(FaceIter *pIter) {
 	else {
 		FaceRootIntern *pRoot = pIter->pFace->pRoots + pIter->boundary;
 		pIter->pCorner = pRoot->pRoot;
-		if (pIter->fpStartPredicate) {
+		if (pIter->fpBoundaryPredicate) {
+			bool valid = false;
+			pIter->err = pIter->fpBoundaryPredicate(
+				pIter->pUserData,
+				pIter->pFace->pRoots + pIter->boundary,
+				&valid
+			);
+			PIX_ERR_RETURN_IFNOT(pIter->err, "");
+			if (!valid) {
+				pIter->pCorner = NULL;
+			}
+		}
+		if (pIter->pCorner && pIter->fpStartPredicate) {
 			pIter->err = faceIterInternFindValidStart(pIter);
 			PIX_ERR_RETURN_IFNOT(pIter->err, "");
 		}
@@ -602,9 +615,16 @@ void setLinkLabel(Corner *pCorner, Label label) {
 }
 
 static
-void setLinkCross(Corner *pCorner) {
+void setCross(FaceIntern *pFace, Corner *pCorner) {
+	pCorner->cross = true;
+	++pFace->pRoots[pCorner->boundary].crossCount;
+}
+
+static
+void setLinkCross(FaceIntern *pFaceA, FaceIntern *pFaceB, Corner *pCorner) {
 	PIX_ERR_ASSERT("", pCorner->pLink);
-	pCorner->pLink->cross = pCorner->cross = true;
+	setCross(pFaceA, pCorner);
+	setCross(pFaceB, pCorner->pLink);
 }
 
 static
@@ -617,10 +637,16 @@ PixErr noOnLeftRightPredicate(void *pUserData, const Corner *pCorner, bool *pVal
 }
 
 static
-PixErr labelCrossOrBounce(FaceIntern *pSubjFace) {
+PixErr noStartIgnore(void *pUserData, FaceRootIntern *pRoot, Corner **ppStart) {
+	*ppStart = NULL;
+	return PIX_ERR_SUCCESS;
+}
+
+static
+PixErr labelCrossOrBounce(FaceIntern *pClipFace, FaceIntern *pSubjFace) {
 	PixErr err = PIX_ERR_SUCCESS;
 	FaceIter subjIter = {0};
-	faceIterInit(pSubjFace, NULL, NULL, NULL, false, &subjIter);
+	faceIterInit(pSubjFace, NULL, NULL, NULL, NULL, false, &subjIter);
 	for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
 		if (!subjIter.pCorner->pLink) {
 			continue;
@@ -649,7 +675,7 @@ PixErr labelCrossOrBounce(FaceIntern *pSubjFace) {
 		}
 		else {
 			label = LABEL_CROSS;
-			setLinkCross(subjIter.pCorner);
+			setLinkCross(pSubjFace, pClipFace, subjIter.pCorner);
 		}
 		setLinkLabel(subjIter.pCorner, label);
 	}
@@ -660,8 +686,16 @@ PixErr labelCrossOrBounce(FaceIntern *pSubjFace) {
 		Corner *pStart;
 	} OverlapChain;
 	OverlapChain chain = {0};
-	faceIterInit(pSubjFace, NULL, noOnLeftRightPredicate, NULL, false, &subjIter);
+	faceIterInit(
+		pSubjFace,
+		NULL, noOnLeftRightPredicate, noStartIgnore, NULL,
+		false,
+		&subjIter
+	);
 	for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
+		if (!subjIter.pCorner) {
+			continue;//skipping this boundary
+		}
 		Label label = subjIter.pCorner->label;
 		if (!subjIter.pCorner->pLink || label == LABEL_CROSS || label == LABEL_BOUNCE) {
 			PIX_ERR_ASSERT("", !chain.pStart);
@@ -693,12 +727,6 @@ PixErr inTestStartPredicate(void *pUserData, const Corner *pCorner, bool *pValid
 }
 
 static
-PixErr inTestNoStartHandler(void *pUserData, FaceRootIntern *pRoot, Corner **ppStart) {
-	*ppStart = NULL;
-	return PIX_ERR_SUCCESS;
-}
-
-static
 bool doesIntersectRay(V2_F32 rayA, V2_F32 rayB, V2_F32 c, V2_F32 d) {
 	F32 acd = getSignedArea(rayA, c, d);
 	F32 bcd = getSignedArea(rayB, c, d);
@@ -713,28 +741,48 @@ bool doesIntersectRay(V2_F32 rayA, V2_F32 rayB, V2_F32 c, V2_F32 d) {
 }
 
 static
+PixErr selfTestBoundaryPredicate(
+	void *pUserData,
+	const FaceRootIntern *pRoot,
+	bool *pValid
+) {
+	*pValid = pRoot != pUserData;
+	return PIX_ERR_SUCCESS;
+}
+
+static
 PixErr isPointInFace(
 	const PixalcFPtrs *pAlloc,
 	I8Arr *pHandBuf,
 	FaceIntern *pFace,
-	V3_F32 point,
+	const Corner *pCorner,
 	bool *pIn
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	V2_F32 pointV2 = *(V2_F32 *)&point;
+	V2_F32 point = *(V2_F32 *)&pCorner->pos;
 	V2_F32 rayB = {.d = {point.d[0], point.d[1] + 1.0f}};
-	V2_F32 rayNormal = pixmV2F32LineNormal(_(rayB V2SUB pointV2));
-	I32 windNum = 0;
+	V2_F32 rayNormal = pixmV2F32LineNormal(_(rayB V2SUB point));
 	FaceIter iter = {0};
-	faceIterInit(pFace, NULL, NULL, NULL, true, &iter);
+	if (pCorner->face == pFace->pRoots[0].pRoot->face) {
+		//corner belongs to face, so skip corner's boundary
+		FaceRootIntern *pRoot = pFace->pRoots + pCorner->boundary;
+		faceIterInit(pFace, pRoot, NULL, NULL, selfTestBoundaryPredicate, true, &iter);
+	}
+	else {
+		faceIterInit(pFace, NULL, NULL, NULL, NULL, true, &iter);
+	}
+	I32 windNum = 0;
 	for (; !faceIterSetCorner(&iter); faceIterIncBoundary(&iter)) {
+		if (!iter.pCorner) {
+			continue;//skipping this boundary
+		}
 		Corner *pCorner = iter.pCorner;
 		I32 size = pFace->pRoots[iter.boundary].originSize;
 		PIXALC_DYN_ARR_RESIZE(I8, pAlloc, pHandBuf, size);
 		I32 i = 0;
 		do {
 			PIX_ERR_RETURN_IFNOT_COND(err, i < size, "infinite or astray loop");
-			F32 sign = _(_(*(V2_F32 *)&pCorner->pos V2SUB pointV2) V2DOT rayNormal);
+			F32 sign = _(_(*(V2_F32 *)&pCorner->pos V2SUB point) V2DOT rayNormal);
 			pHandBuf->pArr[i] = _(sign F32_EQL .0f) ? HAND_ON :
 				_(sign F32_GREAT .0f) ? HAND_RIGHT : HAND_LEFT; 
 		} while(++i, pCorner = pCorner->pNextOrigin, pCorner != iter.pStart);
@@ -766,11 +814,11 @@ PixErr isPointInFace(
 			if (pHandBuf->pArr[iOffset] != HAND_ON) {
 				if (!nextIsOn && pHandBuf->pArr[iOffset] != pHandBuf->pArr[iNext] &&
 					(
-						_(pCorner->pos.d[1] F32_GREATEQL pointV2.d[1]) ||
-						_(pCorner->pNextOrigin->pos.d[1] F32_GREATEQL pointV2.d[1])
+						_(pCorner->pos.d[1] F32_GREATEQL point.d[1]) ||
+						_(pCorner->pNextOrigin->pos.d[1] F32_GREATEQL point.d[1])
 					) &&
 					doesIntersectRay(
-						pointV2, rayB,
+						point, rayB,
 						*(V2_F32 *)&pCorner->pos, *(V2_F32 *)&pCorner->pNextOrigin->pos
 				)) {
 					++windNum;
@@ -781,7 +829,7 @@ PixErr isPointInFace(
 			if (prevIsOn && nextIsOn) {
 				continue;
 			}
-			bool onRay = _(pCorner->pos.d[1] F32_GREATEQL pointV2.d[1]);
+			bool onRay = _(pCorner->pos.d[1] F32_GREATEQL point.d[1]);
 			if (!prevIsOn && !nextIsOn) {
 				if (onRay && pHandBuf->pArr[iPrev] != pHandBuf->pArr[iNext]) {
 					++windNum;
@@ -817,6 +865,7 @@ typedef struct LabelIterArgs {
 	const PixalcFPtrs *pAlloc;
 	I8Arr *pHandBuf;
 	PixalcLinAlloc *pCornerAlloc;
+	FaceIntern *pFaceA;
 	FaceIntern *pFaceB;
 	bool *pIn;
 	bool *pCommonEdges;
@@ -835,10 +884,11 @@ PixErr labelIterStartPredicate(void *pUserData, const Corner *pCorner, bool *pVa
 		pArgs->pAlloc,
 		pArgs->pHandBuf,
 		pArgs->pFaceB,
-		pCorner->pos,
+		pCorner,
 		pArgs->pIn
 	);
 	PIX_ERR_RETURN_IFNOT(err, "");
+	pArgs->pFaceA->pRoots[pCorner->boundary].in = *pArgs->pIn;
 	return err;
 }
 
@@ -904,6 +954,7 @@ PixErr labelCrossDir(
 		.pAlloc = pAlloc,
 		.pHandBuf = pHandBuf,
 		.pCornerAlloc = pCornerAlloc,
+		.pFaceA = pFaceA,
 		.pFaceB = pFaceB,
 		.pIn = &in,
 		.pCommonEdges = &commonEdges
@@ -911,7 +962,7 @@ PixErr labelCrossDir(
 	FaceIter iter = {0};
 	faceIterInit(
 		pFaceA,
-		&labelIterArgs, labelIterStartPredicate, labelIterHandleNoStart,
+		&labelIterArgs, labelIterStartPredicate, labelIterHandleNoStart, NULL,
 		false,
 		&iter
 	);
@@ -922,7 +973,7 @@ PixErr labelCrossDir(
 		if (!iter.pCorner) {
 			//skip this boundary
 			if (commonEdges) {
-				//TODO handle this case
+				pFaceA->pRoots[iter.boundary].commonEdges = true;
 				commonEdges = false;
 			}
 			continue;
@@ -947,7 +998,7 @@ PixErr labelCrossDir(
 					if (chainActive && chainTravel == CROSS_ENTRY ||
 						!chainActive && chainTravel == CROSS_EXIT
 					) {
-						iter.pCorner->cross = true;
+						setCross(pFaceA, iter.pCorner);
 					}
 					break;
 				default:
@@ -969,10 +1020,12 @@ static
 PixErr getFirstClipEntry(FaceIter *pIter, Corner **ppStart) {
 	PixErr err = PIX_ERR_SUCCESS;
 	for (; !faceIterSetCorner(pIter); faceIterInc(pIter)) {
-		if (!pIter->pCorner->checked &&
-			pIter->pCorner->pLink &&
-			pIter->pCorner->cross
-		) {
+		if (!pIter->pCorner) {
+			//skipping this boundary
+			continue;
+		}
+		if (!pIter->pCorner->checked && pIter->pCorner->cross) {
+			PIX_ERR_ASSERT("", pIter->pCorner->pLink);
 			*ppStart = pIter->pCorner;
 			faceIterInc(pIter);
 			return err;
@@ -1087,6 +1140,13 @@ void reverseWind(PlycutFaceArr *pArr, I32 face) {
 }
 
 static
+PixErr outBoundaryPredicate(void *pUserData, const FaceRootIntern *pRoot, bool *pValid) {
+	PIX_ERR_ASSERT("", !pRoot->commonEdges || !pRoot->crossCount);
+	*pValid = pRoot->crossCount;
+	return PIX_ERR_SUCCESS;
+}
+
+static
 PixErr makeClippedFaces(
 	const PixalcFPtrs *pAlloc,
 	FaceIntern *pClipFace,
@@ -1097,21 +1157,12 @@ PixErr makeClippedFaces(
 	I32 clipSize = getFaceSize(pClipFace);
 	I32 subjSize = getFaceSize(pSubjFace);
 	FaceIter iter = {0};
-	faceIterInit(pSubjFace, NULL, NULL, NULL, false, &iter);
+	faceIterInit(pSubjFace, NULL, NULL, NULL, outBoundaryPredicate, false, &iter);
 	do {
 		Corner *pStart = NULL;
 		err = getFirstClipEntry(&iter, &pStart);
 		PIX_ERR_RETURN_IFNOT(err, "");
-		/*
-		if (!pStart && iter.pFace != pClipFace) {
-			PIX_ERR_ASSERT("", iter.pFace == pSubjFace && faceIterAtEnd(&iter));
-			faceIterInit(pClipFace, NULL, NULL, NULL, false, &iter);
-			err = getFirstClipEntry(&iter, &pStart);
-			STUC_RETURN_ERR_IFNOT(err, "");
-		}
-		*/
 		if (!pStart) {
-			PIX_ERR_ASSERT("", faceIterAtEnd(&iter));
 			return err;
 		}
 		I32 outFace = beginFace(pAlloc, pOutArr, pStart);
@@ -1144,6 +1195,87 @@ PixErr makeClippedFaces(
 }
 
 static
+bool isBoundarySpecial(const FaceRootIntern *pRoot) {
+	if (!pRoot->crossCount) {
+		return true;
+	}
+	PIX_ERR_ASSERT("", !pRoot->commonEdges);
+	return false;
+}
+
+static
+PixErr isBoundaryHole(
+	const PixalcFPtrs *pAlloc,
+	I8Arr *pHandBuf,
+	FaceIntern *pFace,
+	I32 boundary,
+	bool *pIsHole
+) {
+	FaceRootIntern *pRoot = pFace->pRoots + boundary;
+	PixErr err = isPointInFace(pAlloc, pHandBuf, pFace, pRoot->pRoot, pIsHole);
+	PIX_ERR_RETURN_IFNOT(err, "");
+	return err;
+}
+
+static
+PixErr addBoundary(
+	const PixalcFPtrs *pAlloc,
+	PlycutFaceArr *pOutArr,
+	const FaceRootIntern *pRoot
+) {
+	PixErr err = PIX_ERR_SUCCESS;
+	const Corner *pCorner = pRoot->pRoot;
+	I32 outIdx = beginFace(pAlloc, pOutArr, pCorner);
+	I32 i = 0;
+	do {
+		PIX_ERR_RETURN_IFNOT_COND(err, i < pRoot->size, "infinite or astray loop");
+		addCorner(pOutArr, outIdx, pCorner);
+	} while(++i, pCorner = pCorner->pNext, pCorner != pRoot->pRoot);
+	return err;
+}
+
+static
+PixErr handleSpecialBoundaries(
+	const PixalcFPtrs *pAlloc,
+	I8Arr *pHandBuf,
+	FaceIntern *pFaceA,
+	FaceIntern *pFaceB,
+	PlycutFaceArr *pOutArr
+) {
+	PixErr err = PIX_ERR_SUCCESS;
+	for (I32 i = 0; i < pFaceA->boundaries; ++i) {
+		FaceRootIntern *pRootA = pFaceA->pRoots + i;
+		if (pRootA->skip || !isBoundarySpecial(pRootA)) {
+			continue;
+		}
+		if (!pRootA->commonEdges) {
+			if (pRootA->in) {
+				//TODO, currently does not correct wind order to match subj
+				I32 outBoundary = addBoundary(pAlloc, pOutArr, pRootA);
+			}
+			continue;
+		}
+		bool aIsHole = false;
+		bool bIsHole = false;
+		I32 boundaryA = pRootA->pRoot->boundary;
+		I32 boundaryB = pRootA->pRoot->pLink->boundary;
+		FaceRootIntern *pRootB = pFaceB->pRoots + boundaryB;
+		PIX_ERR_RETURN_IFNOT_COND(err, !pRootB->skip, "");
+		err = isBoundaryHole(pAlloc, pHandBuf, pFaceA, boundaryA, &aIsHole);
+		PIX_ERR_RETURN_IFNOT(err, "");
+		err = isBoundaryHole(pAlloc, pHandBuf, pFaceB, boundaryB, &bIsHole);
+		PIX_ERR_RETURN_IFNOT(err, "");
+		if (aIsHole == bIsHole) {
+			//add subj to maintain correct wind
+			bool isSubj = pRootA->pRoot->face == PLYCUT_FACE_SUBJECT;
+			addBoundary(pAlloc, pOutArr, isSubj ? pRootA : pRootB);
+		}
+		pRootA->skip = pFaceB->pRoots[boundaryB].skip = true;
+	}
+	return err;
+}
+
+static
 I32 getFaceInputSize(PlycutInput face) {
 	I32 size = 0;
 	for (I32 i = 0; i < face.boundaries; ++i) {
@@ -1162,15 +1294,15 @@ I32 getFaceSize(const FaceIntern *pFace) {
 }
 
 static
-PixErr processCandidates(FaceIntern *pSubj) {
+PixErr processCandidates(FaceIntern *pClip, FaceIntern *pSubj) {
 	PixErr err = PIX_ERR_SUCCESS;
 	FaceIter iter = {0};
-	faceIterInit(pSubj, NULL, NULL, NULL, false, &iter);
+	faceIterInit(pSubj, NULL, NULL, NULL, NULL, false, &iter);
 	for (; !faceIterSetCorner(&iter); faceIterInc(&iter)) {
 		if (iter.pCorner->label == LABEL_CROSS_CANDIDATE &&
 			iter.pCorner->pLink->label == LABEL_CROSS_CANDIDATE
 		) {
-			setLinkCross(iter.pCorner);
+			setLinkCross(pSubj, pClip, iter.pCorner);
 		}
 	}
 	err = faceIterGetErr(&iter);
@@ -1188,10 +1320,10 @@ PixErr plycutClipIntern(
 	PixErr err = PIX_ERR_SUCCESS;
 	//find intersections
 	FaceIter clipIter = {0};
-	faceIterInit(pClip, NULL, NULL, NULL, true, &clipIter);
+	faceIterInit(pClip, NULL, NULL, NULL, NULL, true, &clipIter);
 	for (; !faceIterSetCorner(&clipIter); faceIterInc(&clipIter)) {
 		FaceIter subjIter = {0};
-		faceIterInit(pSubj, NULL, NULL, NULL, true, &subjIter);
+		faceIterInit(pSubj, NULL, NULL, NULL, NULL, true, &subjIter);
 		for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
 			err = intersectHalfEdges(
 				pCornerAlloc,
@@ -1206,7 +1338,7 @@ PixErr plycutClipIntern(
 	err = faceIterGetErr(&clipIter);
 	PIX_ERR_RETURN_IFNOT(err, "");
 
-	err = labelCrossOrBounce(pSubj);
+	err = labelCrossOrBounce(pClip, pSubj);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
 	{
 		I8Arr handBuf = {0};
@@ -1221,13 +1353,25 @@ PixErr plycutClipIntern(
 		PIX_ERR_THROW_IFNOT(err, "", 0);
 	}
 
-	err = processCandidates(pSubj);
+	err = processCandidates(pClip, pSubj);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
 
 	*pOut = (PlycutFaceArr) {0};
 	pixalcLinAllocInit(pAlloc, &pOut->cornerAlloc, sizeof(PlycutCorner), initSize, true);
 	err = makeClippedFaces(pAlloc, pClip, pSubj, pOut);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
+	{
+		I8Arr handBuf = {0};
+		err = handleSpecialBoundaries(pAlloc, &handBuf, pClip, pSubj, pOut);
+		PIX_ERR_THROW_IFNOT(err, "", 2);
+		err = handleSpecialBoundaries(pAlloc, &handBuf, pSubj, pClip, pOut);
+		PIX_ERR_THROW_IFNOT(err, "", 2);
+		PIX_ERR_CATCH(2, err, ;);
+		if (handBuf.pArr) {
+			pAlloc->fpFree(handBuf.pArr);
+		}
+		PIX_ERR_THROW_IFNOT(err, "", 0);
+	}
 	PIX_ERR_CATCH(0, err, ;);
 	return err;
 }
