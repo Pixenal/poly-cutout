@@ -253,15 +253,17 @@ I32 getIntersectAlpha(V3_F32 a, V3_F32 b, V3_F32 c, V3_F32 d, F32 *pAlpha) {
 	F32 cdLen = pixmV2F32Len(_(*(V2_F32 *)&d V2SUB *(V2_F32 *)&c));
 	F32 hAcd = acd / cdLen;
 	F32 hBcd = bcd / cdLen;
-	F32 diff = fabsf(hAcd - hBcd);
 	bool aIsOnCd = _(fabsf(hAcd) F32_LESS SNAP_THRESHOLD);
-	if (_(diff F32_LESS SNAP_THRESHOLD)) {
-		return aIsOnCd ? 2 : 1;
+	bool bIsOnCd = _(fabsf(hBcd) F32_LESS SNAP_THRESHOLD);
+	bool colinear = aIsOnCd && bIsOnCd;
+	F32 diff = fabsf(hAcd - hBcd);
+	if (colinear || _(diff F32_LESS SNAP_THRESHOLD)) {
+		return colinear ? 2 : 1;
 	}
 	if (aIsOnCd) {
 		*pAlpha = .0f;
 	}
-	else if (_(fabsf(hBcd) F32_LESS SNAP_THRESHOLD)) {
+	else if (bIsOnCd) {
 		*pAlpha = 1.0f;
 	}
 	else {
@@ -399,7 +401,7 @@ PixErr insertIntersect(
 			*pColinear = true;
 		}
 		return err;
-	}
+	}	
 	//alphas are set to 0 or 1 in getIntersectAlpha, if within snap threshold.
 	// so not using epsilon here
 	if (aClipEdge > .0f && aClipEdge < 1.0f &&
@@ -416,8 +418,12 @@ PixErr insertIntersect(
 	}
 	else if (!aClipEdge && !aSubjEdge) {
 		//V intersection
-		PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-		linkCorners(pClip, pSubj);
+		V2_F32 ab = _(*(V2_F32 *)&pClip->pos V2SUB *(V2_F32 *)&pSubj->pos);
+		F32 len = pixmV2F32Len(ab);
+		if (_(len F32_LESS SNAP_THRESHOLD)) {
+			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
+			linkCorners(pClip, pSubj);
+		}
 	}
 	else if (!aSubjEdge) {
 		aClipEdge = getColinearAlpha(
