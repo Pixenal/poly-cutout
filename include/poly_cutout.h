@@ -9,7 +9,7 @@
 #endif
 
 #ifndef PLYCUT_SNAP_THRESHOLD
-	#define PLYCUT_SNAP_THRESHOLD .00001f
+	#define PLYCUT_SNAP_THRESHOLD .0f
 #endif
 
 typedef PixtyV2_F32 PlycutV2_F32;

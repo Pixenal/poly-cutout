@@ -271,12 +271,12 @@ I32 getIntersectAlpha(V3_F32 aF32, V3_F32 bF32, V3_F32 cF32, V3_F32 dF32, F32 *p
 	F64 cdLen = pixmV2F64Len(pixmV2F64Subtract(d, c));
 	F64 hAcd = acd / cdLen;
 	F64 hBcd = bcd / cdLen;
-	bool aIsOnCd = _(fabs(hAcd) F64_LESS PLYCUT_SNAP_THRESHOLD);
-	bool bIsOnCd = _(fabs(hBcd) F64_LESS PLYCUT_SNAP_THRESHOLD);
+	bool aIsOnCd = _(fabs(hAcd) F64_LESSEQL PLYCUT_SNAP_THRESHOLD);
+	bool bIsOnCd = _(fabs(hBcd) F64_LESSEQL PLYCUT_SNAP_THRESHOLD);
 	bool colinear = aIsOnCd && bIsOnCd;
 	F64 hDiff = fabs(hAcd - hBcd);
 	F64 areaDiff = acd - bcd;
-	if (colinear || _(hDiff F64_LESS PLYCUT_SNAP_THRESHOLD) || _(areaDiff F64_EQL .0)) {
+	if (colinear || _(hDiff F64_LESSEQL PLYCUT_SNAP_THRESHOLD) || _(areaDiff F64_EQL .0)) {
 		return colinear ? 2 : 1;
 	}
 	if (aIsOnCd) {
@@ -388,10 +388,10 @@ F32 getColinearAlpha(V2_F32 a, V2_F32 b, V2_F32 c) {
 	//assuming here that a != b, degen edge check should have caught that prior
 	F32 alpha =  _(ac V2DOT ab) / _(ab V2DOT ab);
 	F32 abLen = pixmV2F32Len(ab);
-	if (_(fabsf(alpha * abLen) F32_LESS PLYCUT_SNAP_THRESHOLD)) {
+	if (_(fabsf(alpha * abLen) F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
 		alpha = .0f;
 	}
-	else if (_(fabsf((1.0f - alpha) * abLen) F32_LESS PLYCUT_SNAP_THRESHOLD)) {
+	else if (_(fabsf((1.0f - alpha) * abLen) F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
 		alpha = 1.0f;
 	}
 	return alpha;
@@ -437,7 +437,7 @@ PixErr insertIntersect(
 		//V intersection
 		V2_F32 ab = _(*(V2_F32 *)&pClip->pos V2SUB *(V2_F32 *)&pSubj->pos);
 		F32 len = pixmV2F32Len(ab);
-		if (_(len F32_LESS PLYCUT_SNAP_THRESHOLD)) {
+		if (_(len F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
 			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
 			linkCorners(pClip, pSubj);
 		}
