@@ -9,7 +9,7 @@
 #endif
 
 #ifndef PLYCUT_SNAP_THRESHOLD
-	#define PLYCUT_SNAP_THRESHOLD .00005f
+	#define PLYCUT_SNAP_THRESHOLD .00001f
 #endif
 
 typedef PixtyV2_F32 PlycutV2_F32;
@@ -71,6 +71,7 @@ typedef struct PlycutCorner {
 typedef struct PlycutFaceRoot {
 	PlycutCorner *pRoot;
 	int32_t size;
+	bool isHole;
 } PlycutFaceRoot;
 
 typedef struct PlycutFaceArr {
@@ -130,12 +131,13 @@ void plycutClipInitCorner(
 	int32_t boundary,
 	int32_t corner,
 	PlycutClipOrSubj face,
-	PlycutV3_F32 pos
+	PlycutV3_F32 pos,
+	bool cantIntersect
 );
 
 typedef struct PlycutClipFuncs {
-	PlycutV2_F32 (* getClipPos)(const void *, const void *, PlycutInput, int32_t, int32_t);
-	PlycutV3_F32 (* getSubjPos)(const void *, const void *, PlycutInput, int32_t, int32_t);
+	PlycutV2_F32 (* getClipPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *);
+	PlycutV3_F32 (* getSubjPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *);
 } PlycutClipFuncs;
 
 PLYCUT_FORCE_INLINE
@@ -145,9 +147,11 @@ PlycutV3_F32 plycutCallGetClipPos(
 	const PlycutClipFuncs *pFuncs,
 	PlycutInput inputFace,
 	int32_t boundary,
-	int32_t corner
+	int32_t corner,
+	bool *pCantIntersect
 ) {
-	PlycutV2_F32 pos = pFuncs->getClipPos(pUserData, pMesh, inputFace, boundary, corner);
+	PlycutV2_F32 pos =
+		pFuncs->getClipPos(pUserData, pMesh, inputFace, boundary, corner, pCantIntersect);
 	return (PlycutV3_F32) {.d = {pos.d[0], pos.d[1], .0f}};
 }
 
@@ -158,9 +162,11 @@ PlycutV3_F32 plycutCallGetSubjPos(
 	const PlycutClipFuncs *pFuncs,
 	PlycutInput inputFace,
 	int32_t boundary,
-	int32_t corner
+	int32_t corner,
+	bool *pCantIntersect
 ) {
-	return pFuncs->getSubjPos(pUserData, pMesh, inputFace, boundary, corner);
+	return
+		pFuncs->getSubjPos(pUserData, pMesh, inputFace, boundary, corner, pCantIntersect);
 }
 
 PLYCUT_FORCE_INLINE
@@ -169,7 +175,7 @@ void plycutCornerListInit(
 	PixalcLinAlloc *pCornerAlloc,
 	const void *pUserData,
 	const void *pMesh, PlycutInput inputFace,
-	PlycutV3_F32 (* getPos)(const void *, const void *, const PlycutClipFuncs *, PlycutInput, int32_t, int32_t),
+	PlycutV3_F32 (* getPos)(const void *, const void *, const PlycutClipFuncs *, PlycutInput, int32_t, int32_t, bool *),
 	const PlycutClipFuncs *pFuncs,
 	PlycutFaceIntern *pFace,
 	PlycutClipOrSubj face
@@ -180,10 +186,16 @@ void plycutCornerListInit(
 		pFace->pRoots[i].size = inputFace.pSizes[i];
 		pFace->pRoots[i].originSize = pFace->pRoots[i].size;
 		pFace->pRoots[i].boundary = i;
-		pixalcLinAlloc(pCornerAlloc, (void **)&pFace->pRoots[i].pRoot, inputFace.pSizes[i]);
+		pixalcLinAlloc(
+			pCornerAlloc,
+			(void **)&pFace->pRoots[i].pRoot,
+			inputFace.pSizes[i]
+		);
 		for (int32_t j = 0; j < inputFace.pSizes[i]; ++j) {
-			PlycutV3_F32 pos = getPos(pUserData, pMesh, pFuncs, inputFace, i, j);
-			plycutClipInitCorner(pFace, i, j, face, pos);
+			bool cantIntersect = false;
+			PlycutV3_F32 pos =
+				getPos(pUserData, pMesh, pFuncs, inputFace, i, j, &cantIntersect);
+			plycutClipInitCorner(pFace, i, j, face, pos, cantIntersect);
 		}
 	}
 }
@@ -193,9 +205,9 @@ PlycutErr plycutClip(
 	const PlycutAlloc *pAlloc,
 	const void *pUserData,
 	const void *pClipMesh, PlycutInput clipInput,
-	PlycutV2_F32 (* clipGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t),
+	PlycutV2_F32 (* clipGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *),
 	const void *pSubjMesh, PlycutInput subjInput,
-	PlycutV3_F32 (* subjGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t),
+	PlycutV3_F32 (* subjGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *),
 	PlycutFaceArr *pOut
 ) {
 	//subject abbreviated to subj

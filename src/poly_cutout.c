@@ -1,8 +1,9 @@
 #include <float.h>
 #include <math.h>
 
-#include <poly_cutout.h>
 #include <pixenals_math_utils.h>
+
+#include <poly_cutout.h>
 
 typedef int8_t I8;
 typedef int16_t I16;
@@ -15,9 +16,12 @@ typedef uint32_t U32;
 typedef uint64_t U64;
 
 typedef float F32;
+typedef double F64;
 
 typedef PixtyV2_F32 V2_F32;
 typedef PixtyV3_F32 V3_F32;
+typedef PixtyV2_F64 V2_F64;
+typedef PixtyV3_F64 V3_F64;
 
 typedef PixtyRange Range;
 
@@ -60,10 +64,11 @@ typedef struct PlycutCornerIntern {
 	Label label;
 	CrossDir travel;
 	PlycutClipOrSubj face;
-	bool checked;
-	bool original;
-	bool cross;
-	bool dontAdd;
+	bool checked : 1;
+	bool original : 1;
+	bool cross : 1;
+	bool dontAdd : 1;
+	bool cantIntersect : 1;
 } PlycutCornerIntern;
 
 typedef PlycutCornerIntern Corner;
@@ -249,19 +254,29 @@ F32 getSignedArea(V2_F32 a, V2_F32 b, V2_F32 c) {
 	return _(_(b V2SUB a) V2CROSS _(c V2SUB a));
 }
 
+static
+F64 getSignedAreaF64(V2_F64 a, V2_F64 b, V2_F64 c) {
+	return pixmV2F64Cross(pixmV2F64Subtract(b, a), pixmV2F64Subtract(c, a));
+}
+
 //returns 1 if edges are parallel, 2 if colinear
 static
-I32 getIntersectAlpha(V3_F32 a, V3_F32 b, V3_F32 c, V3_F32 d, F32 *pAlpha) {
-	F32 acd = getSignedArea(*(V2_F32 *)&a, *(V2_F32 *)&c, *(V2_F32 *)&d);
-	F32 bcd = getSignedArea(*(V2_F32 *)&b, *(V2_F32 *)&c, *(V2_F32 *)&d);
-	F32 cdLen = pixmV2F32Len(_(*(V2_F32 *)&d V2SUB *(V2_F32 *)&c));
-	F32 hAcd = acd / cdLen;
-	F32 hBcd = bcd / cdLen;
-	bool aIsOnCd = _(fabsf(hAcd) F32_LESS PLYCUT_SNAP_THRESHOLD);
-	bool bIsOnCd = _(fabsf(hBcd) F32_LESS PLYCUT_SNAP_THRESHOLD);
+I32 getIntersectAlpha(V3_F32 aF32, V3_F32 bF32, V3_F32 cF32, V3_F32 dF32, F32 *pAlpha) {
+	V2_F64 a = {aF32.d[0], aF32.d[1]};
+	V2_F64 b = {bF32.d[0], bF32.d[1]};
+	V2_F64 c = {cF32.d[0], cF32.d[1]};
+	V2_F64 d = {dF32.d[0], dF32.d[1]};
+	F64 acd = getSignedAreaF64(a, c, d);
+	F64 bcd = getSignedAreaF64(b, c, d);
+	F64 cdLen = pixmV2F64Len(pixmV2F64Subtract(d, c));
+	F64 hAcd = acd / cdLen;
+	F64 hBcd = bcd / cdLen;
+	bool aIsOnCd = _(fabs(hAcd) F64_LESS PLYCUT_SNAP_THRESHOLD);
+	bool bIsOnCd = _(fabs(hBcd) F64_LESS PLYCUT_SNAP_THRESHOLD);
 	bool colinear = aIsOnCd && bIsOnCd;
-	F32 diff = fabsf(hAcd - hBcd);
-	if (colinear || _(diff F32_LESS PLYCUT_SNAP_THRESHOLD)) {
+	F64 hDiff = fabs(hAcd - hBcd);
+	F64 areaDiff = acd - bcd;
+	if (colinear || _(hDiff F64_LESS PLYCUT_SNAP_THRESHOLD) || _(areaDiff F64_EQL .0)) {
 		return colinear ? 2 : 1;
 	}
 	if (aIsOnCd) {
@@ -271,9 +286,7 @@ I32 getIntersectAlpha(V3_F32 a, V3_F32 b, V3_F32 c, V3_F32 d, F32 *pAlpha) {
 		*pAlpha = 1.0f;
 	}
 	else {
-		F32 divisor = acd - bcd;
-		PIX_ERR_ASSERT("", _(divisor F32_NOTEQL .0f));
-		*pAlpha = acd / divisor;
+		*pAlpha = (F32)(acd / areaDiff);
 	}
 	return 0;
 }
@@ -514,6 +527,9 @@ PixErr intersectHalfEdges(
 	Corner *pClip, Corner *pSubj
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
+	if (pClip->cantIntersect || pSubj->cantIntersect) {
+		return err;
+	}
 	PIX_ERR_RETURN_IFNOT_COND(
 		err,
 		_(*(V2_F32 *)&pClip->pos V2NOTEQL * (V2_F32 *)&pClip->pNextOrigin->pos) &&
@@ -1056,12 +1072,14 @@ void setOutCornerInfo(PlycutCorner *pOut, const Corner *pCorner) {
 	const Corner *pSubj = inClip ? pCorner->pLink : pCorner;
 	switch (pCorner->label) {
 		case LABEL_CROSS:
-			pOut->type = PLYCUT_INTERSECT;
-			pOut->info.intersect.clipCorner = makeClipCornerIdx(pClip);
-			pOut->info.intersect.subjCorner = makeClipCornerIdx(pSubj);
-			pOut->info.intersect.clipAlpha = pClip->alpha;
-			pOut->info.intersect.subjAlpha = pSubj->alpha;
-			break;
+			if (!pClip->original && !pSubj->original) {
+				pOut->type = PLYCUT_INTERSECT;
+				pOut->info.intersect.clipCorner = makeClipCornerIdx(pClip);
+				pOut->info.intersect.subjCorner = makeClipCornerIdx(pSubj);
+				pOut->info.intersect.clipAlpha = pClip->alpha;
+				pOut->info.intersect.subjAlpha = pSubj->alpha;
+				break;
+			}
 		case LABEL_ON_ON:
 		case LABEL_CROSS_DELAYED:
 		case LABEL_CROSS_CANDIDATE:
@@ -1147,6 +1165,15 @@ PixErr outBoundaryPredicate(void *pUserData, const FaceRootIntern *pRoot, bool *
 }
 
 static
+I32 getFaceSize(const FaceIntern *pFace) {
+	I32 size = 0;
+	for (I32 i = 0; i < pFace->boundaries; ++i) {
+		size += pFace->pRoots[i].size;
+	}
+	return size;
+}
+
+static
 PixErr makeClippedFaces(
 	const PixalcFPtrs *pAlloc,
 	FaceIntern *pClipFace,
@@ -1221,11 +1248,13 @@ static
 PixErr addBoundary(
 	const PixalcFPtrs *pAlloc,
 	PlycutFaceArr *pOutArr,
-	const FaceRootIntern *pRoot
+	const FaceRootIntern *pRoot,
+	bool isHole
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
 	const Corner *pCorner = pRoot->pRoot;
 	I32 outIdx = beginFace(pAlloc, pOutArr, pCorner);
+	pOutArr->pArr[outIdx].isHole = isHole;
 	I32 i = 0;
 	do {
 		PIX_ERR_RETURN_IFNOT_COND(err, i < pRoot->size, "infinite or astray loop");
@@ -1251,7 +1280,10 @@ PixErr handleSpecialBoundaries(
 		if (!pRootA->commonEdges) {
 			if (pRootA->in) {
 				//TODO, currently does not correct wind order to match subj
-				I32 outBoundary = addBoundary(pAlloc, pOutArr, pRootA);
+				bool isHole = false;
+				err = isBoundaryHole(pAlloc, pHandBuf, pFaceA, i, &isHole);
+				PIX_ERR_RETURN_IFNOT(err, "");
+				I32 outBoundary = addBoundary(pAlloc, pOutArr, pRootA, isHole);
 			}
 			continue;
 		}
@@ -1268,7 +1300,7 @@ PixErr handleSpecialBoundaries(
 		if (aIsHole == bIsHole) {
 			//add subj to maintain correct wind
 			bool isSubj = pRootA->pRoot->face == PLYCUT_FACE_SUBJECT;
-			addBoundary(pAlloc, pOutArr, isSubj ? pRootA : pRootB);
+			addBoundary(pAlloc, pOutArr, isSubj ? pRootA : pRootB, aIsHole);
 		}
 		pRootA->skip = pFaceB->pRoots[boundaryB].skip = true;
 	}
@@ -1280,15 +1312,6 @@ I32 getFaceInputSize(PlycutInput face) {
 	I32 size = 0;
 	for (I32 i = 0; i < face.boundaries; ++i) {
 		size += face.pSizes[i];
-	}
-	return size;
-}
-
-static
-I32 getFaceSize(const FaceIntern *pFace) {
-	I32 size = 0;
-	for (I32 i = 0; i < pFace->boundaries; ++i) {
-		size += pFace->pRoots[i].size;
 	}
 	return size;
 }
@@ -1394,7 +1417,8 @@ void plycutClipInitCorner(
 	I32 boundary,
 	I32 corner,
 	PlycutClipOrSubj face,
-	V3_F32 pos
+	V3_F32 pos,
+	bool cantIntersect
 ) {
 	I32 jNext = (corner + 1) % pFace->pRoots[boundary].size;
 	I32 jPrev = corner ? corner - 1 : pFace->pRoots[boundary].size - 1;
@@ -1408,6 +1432,7 @@ void plycutClipInitCorner(
 	pCorner->original = true;
 	pCorner->face = face;
 	pCorner->pos = pos;
+	pCorner->cantIntersect = cantIntersect;
 }
 
 void plycutFaceArrDestroy(const PixalcFPtrs *pAlloc, PlycutFaceArr *pArr) {
