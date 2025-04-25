@@ -1251,6 +1251,9 @@ PixErr makeClippedFaces(
 				pCorner = pCorner->pLink;
 			}
 		} while(++i, pCorner != pStart);
+		if (!pOutArr->pArr[outFace].size) {
+			pOutArr->count--;
+		}
 		if (pStart->travel == CROSS_EXIT) {
 			reverseWind(pOutArr, outFace);
 		}
