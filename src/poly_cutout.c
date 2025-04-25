@@ -442,6 +442,20 @@ PixErr insertIntersect(
 			linkCorners(pClip, pSubj);
 		}
 	}
+	else if (pClip->pNextOrigin->cantIntersect && aClipEdge == 1.0f && !aSubjEdge) {
+		//V intersection on next clip corner
+		// (it won't be tested, so we need to handle this case here)
+		V2_F32 ab = _(*(V2_F32 *)&pClip->pNextOrigin->pos V2SUB *(V2_F32 *)&pSubj->pos);
+		F32 len = pixmV2F32Len(ab);
+		if (_(len F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
+			PIX_ERR_RETURN_IFNOT_COND(
+				err,
+				!pClip->pNextOrigin->pLink && !pSubj->pLink,
+				"degen verts"
+			);
+			linkCorners(pClip->pNextOrigin, pSubj);
+		}
+	}
 	else if (!aSubjEdge) {
 		aClipEdge = getColinearAlpha(
 			*(V2_F32 *)&pClip->pos, *(V2_F32 *)&pClip->pNextOrigin->pos,
@@ -515,7 +529,17 @@ PixErr insertOverlap(
 	}
 	else if (!aClipEdge && !aSubjEdge) {
 		//V overlap
+		PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
 		linkCorners(pClip, pSubj);
+	}
+	if (pClip->pNextOrigin->cantIntersect && aClipEdge == 1.0f) {
+		//V overlap on next clip corner (it won't be tested, so handle this here)
+		PIX_ERR_RETURN_IFNOT_COND(
+			err,
+			!pClip->pNextOrigin->pLink && !pSubj->pLink,
+			"degen verts"
+		);
+		linkCorners(pClip->pNextOrigin, pSubj);
 	}
 	return err;
 }
@@ -743,17 +767,14 @@ PixErr inTestStartPredicate(void *pUserData, const Corner *pCorner, bool *pValid
 }
 
 static
-bool doesIntersectRay(V2_F32 rayA, V2_F32 rayB, V2_F32 c, V2_F32 d) {
+F32	getRayAlpha(V2_F32 rayA, V2_F32 rayB, V2_F32 c, V2_F32 d) {
 	F32 acd = getSignedArea(rayA, c, d);
 	F32 bcd = getSignedArea(rayB, c, d);
 	F32 divisor = acd - bcd;
 	if (_(divisor F32_EQL .0f)) {
 		return false;
 	}
-	return _(acd / divisor F32_GREATEQL .0f);
-	//F32 abAlpha = getColinearAlpha(a, b, point);
-	//F32 pointOnAB_Y = a.d[1] + ((b.d[1] - a.d[1]) * abAlpha);
-	//return _(pointOnAB_Y F32_GREATEQL point.d[1]);
+	return acd / divisor ;
 }
 
 static
@@ -771,20 +792,25 @@ PixErr isPointInFace(
 	const PixalcFPtrs *pAlloc,
 	I8Arr *pHandBuf,
 	FaceIntern *pFace,
-	const Corner *pCorner,
+	const Corner *pPoint,
 	bool *pIn
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	V2_F32 point = *(V2_F32 *)&pCorner->pos;
+	V2_F32 point = *(V2_F32 *)&pPoint->pos;
 	V2_F32 rayB = {.d = {point.d[0], point.d[1] + 1.0f}};
 	V2_F32 rayNormal = pixmV2F32LineNormal(_(rayB V2SUB point));
 	FaceIter iter = {0};
-	if (pCorner->face == pFace->pRoots[0].pRoot->face) {
+	bool selfTest = pPoint->face == pFace->pRoots[0].pRoot->face;
+	if (selfTest) {
 		//corner belongs to face, so skip corner's boundary
-		FaceRootIntern *pRoot = pFace->pRoots + pCorner->boundary;
+		FaceRootIntern *pRoot = pFace->pRoots + pPoint->boundary;
 		faceIterInit(pFace, pRoot, NULL, NULL, selfTestBoundaryPredicate, true, &iter);
 	}
 	else {
+		if (pPoint->cantIntersect) {
+			*pIn = false;
+			return err;
+		}
 		faceIterInit(pFace, NULL, NULL, NULL, NULL, true, &iter);
 	}
 	I32 windNum = 0;
@@ -805,7 +831,7 @@ PixErr isPointInFace(
 		typedef struct OverlapChain {
 			Hand hand;
 			bool active;
-			bool onRay;
+			I32 onRay;
 		} OverlapChain;
 		OverlapChain chain = {0};
 		Corner *pStart = NULL;
@@ -832,12 +858,18 @@ PixErr isPointInFace(
 					(
 						_(pCorner->pos.d[1] F32_GREATEQL point.d[1]) ||
 						_(pCorner->pNextOrigin->pos.d[1] F32_GREATEQL point.d[1])
-					) &&
-					doesIntersectRay(
+				)) {
+					F32 alpha = getRayAlpha(
 						point, rayB,
 						*(V2_F32 *)&pCorner->pos, *(V2_F32 *)&pCorner->pNextOrigin->pos
-				)) {
-					++windNum;
+					);
+					if (!selfTest && pCorner->cantIntersect && _(alpha F32_EQL .0f)) {
+						*pIn = true;//if on edge marked 'cant-intersect', assume inside
+						return err;
+					}
+					if (_(alpha F32_GREATEQL .0f)) {
+						++windNum;
+					}
 				}
 				continue;
 			}
@@ -845,7 +877,8 @@ PixErr isPointInFace(
 			if (prevIsOn && nextIsOn) {
 				continue;
 			}
-			bool onRay = _(pCorner->pos.d[1] F32_GREATEQL point.d[1]);
+			I32 onRay = _(pCorner->pos.d[1] F32_EQL point.d[1]) ?
+				2 : _(pCorner->pos.d[1] F32_GREAT point.d[1]);
 			if (!prevIsOn && !nextIsOn) {
 				if (onRay && pHandBuf->pArr[iPrev] != pHandBuf->pArr[iNext]) {
 					++windNum;
@@ -860,6 +893,10 @@ PixErr isPointInFace(
 					++windNum;
 				}
 				//else delayed bounce, or delayed crossing that's not above point
+				if (!selfTest && pCorner->cantIntersect && onRay != chain.onRay) {
+					*pIn = true;//assume inside if on an edge marked 'cant-intersect'
+					return err;
+				}
 				chain.active = false;
 			}
 			else {
