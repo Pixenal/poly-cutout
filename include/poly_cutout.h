@@ -66,6 +66,7 @@ typedef struct PlycutCorner {
 	PlycutV3_F32 pos;
 	PlycutCornerType type;
 	PlycutInfo info;
+	bool cross;
 } PlycutCorner;
 
 typedef struct PlycutFaceRoot {

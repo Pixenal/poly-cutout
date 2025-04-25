@@ -1160,6 +1160,7 @@ void addCorner(PlycutFaceArr *pArr, I32 face, const Corner *pCorner) {
 		pOut->pNext = pNew;
 		pNew->pPrev = pOut;
 	}
+	pNew->cross = pCorner->cross;
 	setOutCornerInfo(pNew, pCorner);
 	++pArr->pArr[face].size;
 }
