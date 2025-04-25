@@ -1310,7 +1310,8 @@ PixErr handleSpecialBoundaries(
 	I8Arr *pHandBuf,
 	FaceIntern *pFaceA,
 	FaceIntern *pFaceB,
-	PlycutFaceArr *pOutArr
+	PlycutFaceArr *pOutArr,
+	bool *pOverlap
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
 	for (I32 i = 0; i < pFaceA->boundaries; ++i) {
@@ -1320,6 +1321,10 @@ PixErr handleSpecialBoundaries(
 		}
 		if (!pRootA->commonEdges) {
 			if (pRootA->in) {
+				if (pOverlap) {
+					*pOverlap = true;
+					return err;
+				}
 				//TODO, currently does not correct wind order to match subj
 				bool isHole = false;
 				err = isBoundaryHole(pAlloc, pHandBuf, pFaceA, i, &isHole);
@@ -1328,6 +1333,10 @@ PixErr handleSpecialBoundaries(
 			}
 			continue;
 		}
+		PIX_ERR_ASSERT(
+			"if in overlap test mode, this code should be unreachable",
+			!pOverlap
+		);
 		bool aIsHole = false;
 		bool bIsHole = false;
 		I32 boundaryA = pRootA->pRoot->boundary;
@@ -1374,14 +1383,25 @@ PixErr processCandidates(FaceIntern *pClip, FaceIntern *pSubj) {
 	return err;
 }
 
+static
+bool wereCornersAdded(const FaceIter *pIter) {
+	FaceRootIntern *pRoot = pIter->pFace->pRoots + pIter->boundary;
+	return pRoot->size != pRoot->originSize;
+}
+
 PixErr plycutClipIntern(
 	const PixalcFPtrs *pAlloc,
 	PixalcLinAlloc *pCornerAlloc,
 	I32 initSize,
 	FaceIntern *pClip, FaceIntern *pSubj,
-	PlycutFaceArr *pOut
+	PlycutFaceArr *pOut,
+	bool *pOverlap
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
+	PIX_ERR_ASSERT("", !pOut ^ !pOverlap);
+	if (pOverlap) {
+		*pOverlap = false;
+	}
 	//find intersections
 	FaceIter clipIter = {0};
 	faceIterInit(pClip, NULL, NULL, NULL, NULL, true, &clipIter);
@@ -1395,6 +1415,12 @@ PixErr plycutClipIntern(
 				clipIter.pCorner, subjIter.pCorner 
 			);
 			PIX_ERR_THROW_IFNOT(err, "", 0);
+			if (pOverlap &&
+				(wereCornersAdded(&clipIter) || wereCornersAdded(&subjIter))
+			) {
+				*pOverlap = true;
+				return err;
+			}
 		}
 		err = faceIterGetErr(&subjIter);
 		PIX_ERR_RETURN_IFNOT(err, "");
@@ -1420,16 +1446,30 @@ PixErr plycutClipIntern(
 	err = processCandidates(pClip, pSubj);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
 
-	*pOut = (PlycutFaceArr) {0};
-	pixalcLinAllocInit(pAlloc, &pOut->cornerAlloc, sizeof(PlycutCorner), initSize, true);
-	err = makeClippedFaces(pAlloc, pClip, pSubj, pOut);
-	PIX_ERR_THROW_IFNOT(err, "", 0);
+	if (pOut) {
+		*pOut = (PlycutFaceArr) {0};
+		pixalcLinAllocInit(
+			pAlloc,
+			&pOut->cornerAlloc,
+			sizeof(PlycutCorner),
+			initSize,
+			true
+		);
+		err = makeClippedFaces(pAlloc, pClip, pSubj, pOut);
+		PIX_ERR_THROW_IFNOT(err, "", 0);
+	}
 	{
 		I8Arr handBuf = {0};
-		err = handleSpecialBoundaries(pAlloc, &handBuf, pClip, pSubj, pOut);
+		err = handleSpecialBoundaries(pAlloc, &handBuf, pClip, pSubj, pOut, pOverlap);
 		PIX_ERR_THROW_IFNOT(err, "", 2);
-		err = handleSpecialBoundaries(pAlloc, &handBuf, pSubj, pClip, pOut);
+		if (pOverlap && *pOverlap) {
+			return err;
+		}
+		err = handleSpecialBoundaries(pAlloc, &handBuf, pSubj, pClip, pOut, pOverlap);
 		PIX_ERR_THROW_IFNOT(err, "", 2);
+		if (pOverlap && *pOverlap) {
+			return err;
+		}
 		PIX_ERR_CATCH(2, err, ;);
 		if (handBuf.pArr) {
 			pAlloc->fpFree(handBuf.pArr);

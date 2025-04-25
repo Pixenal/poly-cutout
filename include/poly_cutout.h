@@ -116,7 +116,8 @@ PlycutErr plycutClipIntern(
 	PixalcLinAlloc *pCornerAlloc,
 	int32_t initSize,
 	PlycutFaceIntern *pClip, PlycutFaceIntern *pSubj,
-	PlycutFaceArr *pOut
+	PlycutFaceArr *pOut,
+	bool *pOverlap
 );
 
 void plycutClipInitMem(
@@ -209,10 +210,12 @@ PlycutErr plycutClip(
 	PlycutV2_F32 (* clipGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *),
 	const void *pSubjMesh, PlycutInput subjInput,
 	PlycutV3_F32 (* subjGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *),
-	PlycutFaceArr *pOut
+	PlycutFaceArr *pOut,
+	bool *pOverlap
 ) {
 	//subject abbreviated to subj
 	PlycutErr err = PIX_ERR_SUCCESS;
+	PIX_ERR_RETURN_IFNOT_COND(err, !pOut ^ !pOverlap, "Either pOut or pOverlap must be non-null");
 	PlycutClipFuncs funcs = {.getClipPos = clipGetPos, .getSubjPos = subjGetPos};
 	PixalcLinAlloc rootAlloc = {0};
 	PixalcLinAlloc cornerAlloc = {0};
@@ -236,7 +239,7 @@ PlycutErr plycutClip(
 		&subj,
 		PLYCUT_FACE_SUBJECT
 	);
-	err = plycutClipIntern(pAlloc, &cornerAlloc, initSize, &clip, &subj, pOut);
+	err = plycutClipIntern(pAlloc, &cornerAlloc, initSize, &clip, &subj, pOut, pOverlap);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
 	PIX_ERR_CATCH(0, err, ;);
 	pixalcLinAllocDestroy(&rootAlloc);
