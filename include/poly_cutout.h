@@ -99,6 +99,7 @@ typedef struct PlycutFaceRootIntern {
 	bool commonEdges;
 	bool skip;
 	bool in;
+	bool modified;
 } PlycutFaceRootIntern;
 
 typedef struct PlycutFaceIntern {

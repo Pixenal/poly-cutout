@@ -5,6 +5,9 @@
 
 #include <poly_cutout.h>
 
+//TODO
+//	-unify naming of root/ boundary
+
 typedef int8_t I8;
 typedef int16_t I16;
 typedef int32_t I32;
@@ -332,28 +335,34 @@ PixErr insertCorner(FaceRootIntern *pRoot, Corner *pCorner, Corner *pNew, bool m
 		pNew->pNextOrigin->pPrevOrigin = pNew;
 		++pRoot->originSize;
 	}
+
+	pRoot->modified = true;
 	return err;
 }
 
 static
-void linkCorners(Corner *pA, Corner *pB) {
-	PIX_ERR_ASSERT("trying to link corners(s) with existing link", !pA->pLink && !pB->pLink);
+void linkCorners(FaceRootIntern *pARoot, FaceRootIntern *pBRoot, Corner *pA, Corner *pB) {
+	PIX_ERR_ASSERT(
+		"trying to link corners(s) with existing link",
+		!pA->pLink && !pB->pLink
+	);
 	pA->pLink = pB;
 	pB->pLink = pA;
+	pARoot->modified = pBRoot->modified = true;
 }
 
 static
 PixErr insertT(
 	PixalcLinAlloc *pAlloc,
-	FaceRootIntern *pRoot, Corner *pEdge, F32 aEdge,
-	Corner *pPoint,
+	FaceRootIntern *pEdgeRoot, Corner *pEdge, F32 aEdge,
+	FaceRootIntern *pPointRoot, Corner *pPoint,
 	bool testForDegen
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
 	PIX_ERR_ASSERT("", pEdge->original && pPoint->original);
 	if (testForDegen) {
 		if (_(*(V2_F32 *)&pPoint->pos V2EQL *(V2_F32 *)&pEdge->pos)) {
-			linkCorners(pEdge, pPoint);
+			linkCorners(pEdgeRoot, pPointRoot, pEdge, pPoint);
 			return err;
 		}
 	}
@@ -361,8 +370,8 @@ PixErr insertT(
 	pixalcLinAlloc(pAlloc, &pCopy, 1);
 	*pCopy = *pPoint;
 	pCopy->alpha = aEdge;
-	linkCorners(pCopy, pPoint);
-	err = insertCorner(pRoot, pEdge, pCopy, false);
+	linkCorners(pEdgeRoot, pPointRoot, pCopy, pPoint);
+	err = insertCorner(pEdgeRoot, pEdge, pCopy, false);
 	PIX_ERR_RETURN_IFNOT(err, "");
 	return err;
 }
@@ -383,15 +392,15 @@ PixErr handleXIntersect(
 	bool onClip = _(*(V2_F32 *)&pos V2EQL *(V2_F32 *)&pClip->pos);
 	bool onSubj = _(*(V2_F32 *)&pos V2EQL *(V2_F32 *)&pSubj->pos);
 	if (onClip && onSubj) {
-		linkCorners(pClip, pSubj);
+		linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
 		return err;
 	}
 	if (onClip) {
-		insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, false);
+		insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClipRoot, pClip, false);
 		return err;
 	}
 	if (onSubj) {
-		insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, false);
+		insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubjRoot, pSubj, false);
 		return err;
 	}
 	Corner *pIntersect = NULL;
@@ -400,7 +409,7 @@ PixErr handleXIntersect(
 	pIntersect[1] = pIntersect[0];
 	pIntersect[0].alpha = aClipEdge;
 	pIntersect[1].alpha = aSubjEdge;
-	linkCorners(pIntersect, pIntersect + 1);
+	linkCorners(pClipRoot, pSubjRoot, pIntersect, pIntersect + 1);
 	err = insertCorner(pClipRoot, pClip, pIntersect, false);
 	PIX_ERR_RETURN_IFNOT(err, "");
 	err = insertCorner(pSubjRoot, pSubj, pIntersect + 1, false);
@@ -467,7 +476,7 @@ PixErr insertIntersect(
 		F32 len = pixmV2F32Len(ab);
 		if (_(len F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
 			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-			linkCorners(pClip, pSubj);
+			linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
 		}
 	}
 	else if (pClip->pNextOrigin->cantIntersect && aClipEdge == 1.0f && !aSubjEdge) {
@@ -481,7 +490,7 @@ PixErr insertIntersect(
 				!pClip->pNextOrigin->pLink && !pSubj->pLink,
 				"degen verts"
 			);
-			linkCorners(pClip->pNextOrigin, pSubj);
+			linkCorners(pClipRoot, pSubjRoot, pClip->pNextOrigin, pSubj);
 		}
 	}
 	else if (!aSubjEdge) {
@@ -492,11 +501,11 @@ PixErr insertIntersect(
 		if (!aClipEdge) {
 			//V intersection
 			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-			linkCorners(pClip, pSubj);
+			linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
 		}
 		else if (aClipEdge > .0f && aClipEdge < 1.0f) {
 			//T intersection on clip edge
-			err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, true);
+			err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubjRoot, pSubj, true);
 			PIX_ERR_RETURN_IFNOT(err, "");
 		}
 	}
@@ -508,11 +517,11 @@ PixErr insertIntersect(
 		if (!aSubjEdge) {
 			//V intersection
 			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-			linkCorners(pClip, pSubj);
+			linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
 		}
 		else if (aSubjEdge > .0f && aSubjEdge < 1.0f) {
 			//T intersection on subject edge
-			err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, true);
+			err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClipRoot, pClip, true);
 			PIX_ERR_RETURN_IFNOT(err, "");
 		}
 	}
@@ -540,25 +549,25 @@ PixErr insertOverlap(
 	bool aSubjIsIn01 = aSubjEdge > .0f && aSubjEdge < 1.0f;
 	if (aClipIsIn01 && aSubjIsIn01) {
 		//X overlap
-		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, true);
+		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubjRoot, pSubj, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
-		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, true);
+		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClipRoot, pClip, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (aClipIsIn01 && (!aSubjIsIn01 || aSubjEdge == 1.0f)) {
 		//T overlap on clip edge
-		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, true);
+		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubjRoot, pSubj, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (aSubjIsIn01 && (!aClipIsIn01 || aClipEdge == 1.0f)) {
 		//T overlap on subj edge
-		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, true);
+		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClipRoot, pClip, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (!aClipEdge && !aSubjEdge) {
 		//V overlap
 		PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-		linkCorners(pClip, pSubj);
+		linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
 	}
 	if (pClip->pNextOrigin->cantIntersect && aClipEdge == 1.0f) {
 		//V overlap on next clip corner (it won't be tested, so handle this here)
@@ -567,7 +576,7 @@ PixErr insertOverlap(
 			!pClip->pNextOrigin->pLink && !pSubj->pLink,
 			"degen verts"
 		);
-		linkCorners(pClip->pNextOrigin, pSubj);
+		linkCorners(pClipRoot, pSubjRoot, pClip->pNextOrigin, pSubj);
 	}
 	return err;
 }
@@ -1412,9 +1421,11 @@ PixErr processCandidates(FaceIntern *pClip, FaceIntern *pSubj) {
 }
 
 static
-bool wereCornersAdded(const FaceIter *pIter) {
+bool wasBoundaryModified(const FaceIter *pIter) {
 	FaceRootIntern *pRoot = pIter->pFace->pRoots + pIter->boundary;
-	return pRoot->size != pRoot->originSize;
+	bool modified = pRoot->modified;
+	pRoot->modified = false;
+	return modified;
 }
 
 PixErr plycutClipIntern(
@@ -1444,7 +1455,7 @@ PixErr plycutClipIntern(
 			);
 			PIX_ERR_THROW_IFNOT(err, "", 0);
 			if (pOverlap &&
-				(wereCornersAdded(&clipIter) || wereCornersAdded(&subjIter))
+				(wasBoundaryModified(&clipIter) || wasBoundaryModified(&subjIter))
 			) {
 				*pOverlap = true;
 				return err;
