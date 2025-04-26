@@ -343,8 +343,20 @@ void linkCorners(Corner *pA, Corner *pB) {
 }
 
 static
-PixErr insertT(PixalcLinAlloc *pAlloc, FaceRootIntern *pRoot, Corner *pEdge, F32 aEdge, Corner *pPoint) {
+PixErr insertT(
+	PixalcLinAlloc *pAlloc,
+	FaceRootIntern *pRoot, Corner *pEdge, F32 aEdge,
+	Corner *pPoint,
+	bool testForDegen
+) {
 	PixErr err = PIX_ERR_SUCCESS;
+	PIX_ERR_ASSERT("", pEdge->original && pPoint->original);
+	if (testForDegen) {
+		if (_(*(V2_F32 *)&pPoint->pos V2EQL *(V2_F32 *)&pEdge->pos)) {
+			linkCorners(pEdge, pPoint);
+			return err;
+		}
+	}
 	Corner *pCopy = NULL;
 	pixalcLinAlloc(pAlloc, &pCopy, 1);
 	*pCopy = *pPoint;
@@ -363,13 +375,29 @@ PixErr handleXIntersect(
 	F32 aClipEdge, F32 aSubjEdge
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	Corner *pIntersect = NULL;
-	pixalcLinAlloc(pAlloc, &pIntersect, 2);//2 copies for each list
+	PIX_ERR_ASSERT("", pClip->original && pSubj->original);
 	//subject face is 3D (clip face is 2D), so we use it to calc interesction
-	pIntersect[0].pos = _(pSubj->pos V3ADD _(
+	V3_F32 pos = _(pSubj->pos V3ADD _(
 		_(pSubj->pNextOrigin->pos V3SUB pSubj->pos) V3MULS aSubjEdge)
 	);
-	pIntersect[1] = *pIntersect;
+	bool onClip = _(*(V2_F32 *)&pos V2EQL *(V2_F32 *)&pClip->pos);
+	bool onSubj = _(*(V2_F32 *)&pos V2EQL *(V2_F32 *)&pSubj->pos);
+	if (onClip && onSubj) {
+		linkCorners(pClip, pSubj);
+		return err;
+	}
+	if (onClip) {
+		insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, false);
+		return err;
+	}
+	if (onSubj) {
+		insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, false);
+		return err;
+	}
+	Corner *pIntersect = NULL;
+	pixalcLinAlloc(pAlloc, &pIntersect, 2);//2 copies for each list
+	pIntersect[0].pos = pos;
+	pIntersect[1] = pIntersect[0];
 	pIntersect[0].alpha = aClipEdge;
 	pIntersect[1].alpha = aSubjEdge;
 	linkCorners(pIntersect, pIntersect + 1);
@@ -468,7 +496,7 @@ PixErr insertIntersect(
 		}
 		else if (aClipEdge > .0f && aClipEdge < 1.0f) {
 			//T intersection on clip edge
-			err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj);
+			err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, true);
 			PIX_ERR_RETURN_IFNOT(err, "");
 		}
 	}
@@ -484,7 +512,7 @@ PixErr insertIntersect(
 		}
 		else if (aSubjEdge > .0f && aSubjEdge < 1.0f) {
 			//T intersection on subject edge
-			err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip);
+			err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, true);
 			PIX_ERR_RETURN_IFNOT(err, "");
 		}
 	}
@@ -512,19 +540,19 @@ PixErr insertOverlap(
 	bool aSubjIsIn01 = aSubjEdge > .0f && aSubjEdge < 1.0f;
 	if (aClipIsIn01 && aSubjIsIn01) {
 		//X overlap
-		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj);
+		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
-		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip);
+		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (aClipIsIn01 && (!aSubjIsIn01 || aSubjEdge == 1.0f)) {
 		//T overlap on clip edge
-		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj);
+		err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubj, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (aSubjIsIn01 && (!aClipIsIn01 || aClipEdge == 1.0f)) {
 		//T overlap on subj edge
-		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip);
+		err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClip, true);
 		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (!aClipEdge && !aSubjEdge) {
@@ -613,9 +641,9 @@ bool isLinkWithPrevOrNext(
 
 static
 LocalInfo getLocalInfoForIntersect(const Corner *pClip, const Corner *pSubj) {
-	V2_F32 sPrev = *(V2_F32 *)&pSubj->pPrev->pos;
+	V2_F32 sPrev = *(V2_F32 *)&pSubj->pPrevOrigin->pos;
 	V2_F32 point = *(V2_F32 *)&pSubj->pos;
-	V2_F32 sNext = *(V2_F32 *)&pSubj->pNext->pos;
+	V2_F32 sNext = *(V2_F32 *)&pSubj->pNextOrigin->pos;
 	F32 signSNext = getSignedArea(sPrev, point, sNext);
 	LocalInfo info = {
 		.turnSNext = _(signSNext F32_EQL .0f) ? HAND_STRAIGHT :
@@ -625,8 +653,8 @@ LocalInfo getLocalInfoForIntersect(const Corner *pClip, const Corner *pSubj) {
 		isLinkWithPrevOrNext(pSubj->pPrev, pClip->pPrev, pClip->pNext, &info.sPrevLink);
 	info.sNextOnC =
 		isLinkWithPrevOrNext(pSubj->pNext, pClip->pPrev, pClip->pNext, &info.sNextLink);
-	V2_F32 cPrev = *(V2_F32 *)&pClip->pPrev->pos;
-	V2_F32 cNext = *(V2_F32 *)&pClip->pNext->pos;
+	V2_F32 cPrev = *(V2_F32 *)&pClip->pPrevOrigin->pos;
+	V2_F32 cNext = *(V2_F32 *)&pClip->pNextOrigin->pos;
 	F32 signCPrev_0 = getSignedArea(cPrev, sPrev, point);
 	F32 signCPrev_1 = getSignedArea(cPrev, point, sNext);
 	F32 signCNext_0 = getSignedArea(cNext, sPrev, point);
