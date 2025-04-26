@@ -302,21 +302,31 @@ typedef enum Intersect {
 } Intersect;
 
 static
-PixErr insertCorner(FaceRootIntern *pRoot, Corner *pCorner, Corner *pNew, bool makeOriginal) {
+PixErr insertCorner(
+	FaceRootIntern *pRoot, Corner *pCorner,
+	Corner *pNew,
+	bool makeOriginal
+) {
 	PixErr err = PIX_ERR_SUCCESS;
 	if (!makeOriginal) {
 		while (
 			!pCorner->pNext->original &&
-			_(pNew->alpha F32_GREAT pCorner->pNext->alpha)
-		) {
+			(
+				_(pNew->alpha F32_GREAT pCorner->pNext->alpha) ||
+				(
+					_(pNew->alpha F32_EQL pCorner->pNext->alpha) &&
+					_(pNew->pos.d[2] F32_LESS pCorner->pNext->pos.d[2])
+				)
+		)) {
 			pCorner = pCorner->pNext;
-			PIX_ERR_RETURN_IFNOT_COND(
-				err,
-				_(pNew->alpha F32_NOTEQL pCorner->alpha),
-				"degen verts"
-			);
 		}
 	}
+	PIX_ERR_RETURN_IFNOT_COND(
+		err,
+		_(pNew->alpha F32_NOTEQL pCorner->alpha) ||
+		_(pNew->pos.d[2] F32_NOTEQL pCorner->pos.d[2]),
+		"degen verts"
+	);
 	pNew->pNext = pCorner->pNext;
 	pCorner->pNext = pNew;
 	pNew->pNext->pPrev = pNew;
@@ -593,8 +603,8 @@ PixErr intersectHalfEdges(
 	}
 	PIX_ERR_RETURN_IFNOT_COND(
 		err,
-		_(*(V2_F32 *)&pClip->pos V2NOTEQL * (V2_F32 *)&pClip->pNextOrigin->pos) &&
-		_(*(V2_F32 *)&pSubj->pos V2NOTEQL * (V2_F32 *)&pSubj->pNextOrigin->pos),
+		_(*(V2_F32 *)&pClip->pos V2NOTEQL *(V2_F32 *)&pClip->pNextOrigin->pos) &&
+		_(pSubj->pos V3NOTEQL pSubj->pNextOrigin->pos),
 		"degen edge(s)"
 	);
 	bool colinear = false;
