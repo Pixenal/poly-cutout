@@ -1027,6 +1027,7 @@ PixErr labelIterHandleNoStart(void *pUserData, FaceRootIntern *pRoot, Corner **p
 	pixalcLinAlloc(pArgs->pCornerAlloc, &pNew, 1);
 	pNew->pos = midPoint;
 	pNew->dontAdd = true;
+	pNew->pos.d[2] = pA->pos.d[2] + 1.0f;//to stop insert func throwing degen err
 	insertCorner(pRoot, pA, pNew, true);
 	*ppStart = pNew;
 	return err;
@@ -1068,7 +1069,6 @@ PixErr labelCrossDir(
 	);
 	bool chainActive = false;
 	CrossDir chainTravel = 0;
-	//TODO handle no start corner
 	for (; !faceIterSetCorner(&iter); faceIterInc(&iter)) {
 		if (!iter.pCorner) {
 			//skip this boundary
