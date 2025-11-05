@@ -377,7 +377,7 @@ PixErr insertT(
 		}
 	}
 	Corner *pCopy = NULL;
-	pixalcLinAlloc(pAlloc, &pCopy, 1);
+	pixalcLinAlloc(pAlloc, (void **)&pCopy, 1);
 	*pCopy = *pPoint;
 	pCopy->alpha = aEdge;
 	linkCorners(pEdgeRoot, pPointRoot, pCopy, pPoint);
@@ -414,7 +414,7 @@ PixErr handleXIntersect(
 		return err;
 	}
 	Corner *pIntersect = NULL;
-	pixalcLinAlloc(pAlloc, &pIntersect, 2);//2 copies for each list
+	pixalcLinAlloc(pAlloc, (void **)&pIntersect, 2);//2 copies for each list
 	pIntersect[0].pos = pos;
 	pIntersect[1] = pIntersect[0];
 	pIntersect[0].alpha = aClipEdge;
@@ -691,6 +691,8 @@ LocalInfo getLocalInfoForIntersect(const Corner *pClip, const Corner *pSubj) {
 				HAND_LEFT : HAND_RIGHT;
 			info.turnCNext = _(signCNext_0 F32_GREAT .0f) || _(signCNext_1 F32_GREAT .0f) ?
 				HAND_LEFT : HAND_RIGHT;
+		default:
+			PIX_ERR_ASSERT("invalid hand", false);
 	}
 	return info;
 }
@@ -804,13 +806,6 @@ PixErr labelCrossOrBounce(FaceIntern *pClipFace, FaceIntern *pSubjFace) {
 	err = faceIterGetErr(&subjIter);
 	PIX_ERR_RETURN_IFNOT(err, "");
 	return err;
-}
-
-static
-PixErr inTestStartPredicate(void *pUserData, const Corner *pCorner, bool *pValid) {
-	F32 diff = pCorner->pos.d[0] - ((V2_F32 *)pUserData)->d[0];
-	*pValid = _(fabsf(diff) F32_GREAT PLYCUT_SNAP_THRESHOLD * 4.0f);
-	return PIX_ERR_SUCCESS;
 }
 
 static
@@ -1024,7 +1019,7 @@ PixErr labelIterHandleNoStart(void *pUserData, FaceRootIntern *pRoot, Corner **p
 	Corner *pB = pCorner->pNext;
 	V3_F32 midPoint = _(pA->pos V3ADD _(_(pB->pos V3SUB pA->pos) V3DIVS 2.0f));
 	Corner *pNew = NULL;
-	pixalcLinAlloc(pArgs->pCornerAlloc, &pNew, 1);
+	pixalcLinAlloc(pArgs->pCornerAlloc, (void **)&pNew, 1);
 	pNew->pos = midPoint;
 	pNew->dontAdd = true;
 	pNew->pos.d[2] = pA->pos.d[2] + 1.0f;//to stop insert func throwing degen err
@@ -1048,7 +1043,6 @@ PixErr labelCrossDir(
 	FaceIntern *pFaceA, FaceIntern *pFaceB
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	Corner *pStart = NULL;
 	bool in = false;
 	bool commonEdges = false;
 	LabelIterArgs labelIterArgs = {
@@ -1194,7 +1188,7 @@ void addCorner(PlycutFaceArr *pArr, I32 face, const Corner *pCorner) {
 		return;
 	}
 	PlycutCorner *pNew = NULL;
-	pixalcLinAlloc(&pArr->cornerAlloc, &pNew, 1);
+	pixalcLinAlloc(&pArr->cornerAlloc, (void **)&pNew, 1);
 	pNew->pos = pCorner->pos;
 	if (!pArr->pArr[face].pRoot) {
 		pArr->pArr[face].pRoot = pNew;
@@ -1376,7 +1370,7 @@ PixErr handleSpecialBoundaries(
 				bool isHole = false;
 				err = isBoundaryHole(pAlloc, pHandBuf, pFaceA, i, &isHole);
 				PIX_ERR_RETURN_IFNOT(err, "");
-				I32 outBoundary = addBoundary(pAlloc, pOutArr, pRootA, isHole);
+				addBoundary(pAlloc, pOutArr, pRootA, isHole);
 			}
 			continue;
 		}
