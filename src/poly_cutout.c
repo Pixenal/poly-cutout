@@ -691,6 +691,7 @@ LocalInfo getLocalInfoForIntersect(const Corner *pClip, const Corner *pSubj) {
 				HAND_LEFT : HAND_RIGHT;
 			info.turnCNext = _(signCNext_0 F32_GREAT .0f) || _(signCNext_1 F32_GREAT .0f) ?
 				HAND_LEFT : HAND_RIGHT;
+			break;
 		default:
 			PIX_ERR_ASSERT("invalid hand", false);
 	}
