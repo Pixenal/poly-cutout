@@ -1531,10 +1531,14 @@ void plycutClipInitMem(
 	PixalcLinAlloc *pCornerAlloc,
 	I32 *pInitSize
 ) {
-	I32 rootCount = clipInput.boundaries + subjInput.boundaries;
-	pixalcLinAllocInit(pAlloc, pRootAlloc, sizeof(FaceRootIntern), rootCount, true);
+	if (pRootAlloc) {
+		I32 rootCount = clipInput.boundaries + subjInput.boundaries;
+		pixalcLinAllocInit(pAlloc, pRootAlloc, sizeof(FaceRootIntern), rootCount, true);
+	}
 	*pInitSize = getFaceInputSize(clipInput) + getFaceInputSize(subjInput);
-	pixalcLinAllocInit(pAlloc, pCornerAlloc, sizeof(Corner), *pInitSize, true);
+	if (pCornerAlloc) {
+		pixalcLinAllocInit(pAlloc, pCornerAlloc, sizeof(Corner), *pInitSize, true);
+	}
 }
 
 void plycutClipInitCorner(

@@ -107,6 +107,11 @@ typedef struct PlycutFaceIntern {
 	int32_t boundaries;
 } PlycutFaceIntern;
 
+typedef struct PlycutAlloc {
+	PixalcLinAlloc root;
+	PixalcLinAlloc corner;
+} PlycutMem;
+
 typedef enum PlycutClipOrSubj {
 	PLYCUT_FACE_CLIP,
 	PLYCUT_FACE_SUBJECT
@@ -212,20 +217,35 @@ PlycutErr plycutClip(
 	const void *pSubjMesh, PlycutInput subjInput,
 	PlycutV3_F32 (* subjGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *),
 	PlycutFaceArr *pOut,
-	bool *pOverlap
+	bool *pOverlap,
+	PlycutMem *pLinAlc //will reuse existing mem if this isn't null
 ) {
+	PIX_ERR_ASSERT(
+		"one alloc handle has been used, but not the other",
+		!(pLinAlc->root.valid ^ pLinAlc->corner.valid)
+	);
+	bool reuseMem = pLinAlc->root.valid;
 	//subject abbreviated to subj
 	PlycutErr err = PIX_ERR_SUCCESS;
 	PIX_ERR_RETURN_IFNOT_COND(err, !pOut ^ !pOverlap, "Either pOut or pOverlap must be non-null");
 	PlycutClipFuncs funcs = {.getClipPos = clipGetPos, .getSubjPos = subjGetPos};
 	PixalcLinAlloc rootAlloc = {0};
 	PixalcLinAlloc cornerAlloc = {0};
+	PixalcLinAlloc *pRootAlc = pLinAlc ? &pLinAlc->root : &rootAlloc;
+	PixalcLinAlloc *pCornerAlc = pLinAlc ? &pLinAlc->corner : &cornerAlloc;
 	int32_t initSize = 0;
-	plycutClipInitMem(pAlloc, clipInput, subjInput, &rootAlloc, &cornerAlloc, &initSize);
+	plycutClipInitMem(
+		pAlloc,
+		clipInput,
+		subjInput,
+		reuseMem ? NULL : pRootAlc,
+		reuseMem ? NULL : pCornerAlc,
+		&initSize
+	);
 	PlycutFaceIntern clip = {0};
 	PlycutFaceIntern subj = {0};
 	plycutCornerListInit(
-		&rootAlloc, &cornerAlloc,
+		pRootAlc, pCornerAlc,
 		pUserData,
 		pClipMesh, clipInput,
 		plycutCallGetClipPos, &funcs,
@@ -233,19 +253,36 @@ PlycutErr plycutClip(
 		PLYCUT_FACE_CLIP
 	);
 	plycutCornerListInit(
-		&rootAlloc, &cornerAlloc,
+		pRootAlc, pCornerAlc,
 		pUserData,
 		pSubjMesh, subjInput,
 		plycutCallGetSubjPos, &funcs,
 		&subj,
 		PLYCUT_FACE_SUBJECT
 	);
-	err = plycutClipIntern(pAlloc, &cornerAlloc, initSize, &clip, &subj, pOut, pOverlap);
+	err = plycutClipIntern(pAlloc, pCornerAlc, initSize, &clip, &subj, pOut, pOverlap);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
 	PIX_ERR_CATCH(0, err, ;);
-	pixalcLinAllocDestroy(&rootAlloc);
-	pixalcLinAllocDestroy(&cornerAlloc);
+	if (pLinAlc) {
+		pixalcLinAllocClear(pRootAlc);
+		pixalcLinAllocClear(pCornerAlc);
+	}
+	else {
+		pixalcLinAllocDestroy(pRootAlc);
+		pixalcLinAllocDestroy(pCornerAlc);
+	}
 	return err;
+}
+
+static inline
+void plycutMemDestroy(PlycutMem *pMem) {
+	PIX_ERR_ASSERT("", pMem);
+	if (pMem->root.valid) {
+		pixalcLinAllocDestroy(&pMem->root);
+	}
+	if (pMem->corner.valid) {
+		pixalcLinAllocDestroy(&pMem->corner);
+	}
 }
 
 void plycutFaceArrDestroy(const PlycutAlloc *pAlloc, PlycutFaceArr *pArr);
