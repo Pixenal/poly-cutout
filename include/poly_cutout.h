@@ -1,3 +1,19 @@
+/* 
+SPDX-FileCopyrightText: 2025 Caleb Dawson
+SPDX-License-Identifier: Apache-2.0
+*/
+
+/*
+implements Foster-Hormann-Popa clipping:
+Clipping simple polygons with degenerate intersections, Foster et al, 2019
+https://www.inf.usi.ch/hormann/papers/Foster.2019.CSP.pdf
+
+Foster-Hormann-Popa modifies Greiner-Hormann clipping to properly handle degen cases.
+original Greiner-Hormann paper:
+Efficient clipping of arbitrary polygons, Greiner et al, 1998
+https://www.inf.usi.ch/hormann/papers/Greiner.1998.ECO.pdf
+*/
+
 #pragma once
 
 #include <pixenals_alloc_utils.h>
