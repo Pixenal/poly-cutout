@@ -11,4 +11,4 @@ which builds on the Greiner-Hormann method in order to handle degenerate interse
   
 ---
 
-This library also provides support for pesudo 3D clip (not subject) polygons, ie, depth stored in z is preserved.
+This library also provides support for pesudo 3D subject (not clip) polygons, ie, depth stored in z is preserved.
