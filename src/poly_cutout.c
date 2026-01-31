@@ -960,8 +960,6 @@ PixErr isPointInFace(
 	return err;
 }
 
-		//getIntersectAlpha snaps to 0 or 1 if within threshold, so not using epsilon
-
 typedef struct LabelIterArgs {
 	const PixalcFPtrs *pAlloc;
 	I8Arr *pHandBuf;
@@ -1304,7 +1302,6 @@ PixErr makeClippedFaces(
 		if (pStart->travel == CROSS_EXIT) {
 			reverseWind(pOutArr, outFace);
 		}
-		//unlike clip and subject, out-face corners are not circularly linked
 	} while(true);
 	return err;
 }
