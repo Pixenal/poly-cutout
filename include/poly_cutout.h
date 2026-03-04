@@ -16,6 +16,8 @@ https://www.inf.usi.ch/hormann/papers/Greiner.1998.ECO.pdf
 
 #pragma once
 
+#include <float.h>
+
 #include <pixenals_alloc_utils.h>
 
 #ifdef WIN32
@@ -118,9 +120,15 @@ typedef struct PlycutFaceRootIntern {
 	bool modified;
 } PlycutFaceRootIntern;
 
+typedef struct PlycutBb {
+	PixtyV2_F32 min;
+	PixtyV2_F32 max;
+} PlycutBb;
+
 typedef struct PlycutFaceIntern {
 	PlycutFaceRootIntern *pRoots;
 	int32_t boundaries;
+	PlycutBb bb;
 } PlycutFaceIntern;
 
 typedef struct PlycutAlloc {
@@ -204,7 +212,13 @@ void plycutCornerListInit(
 	PlycutFaceIntern *pFace,
 	PlycutClipOrSubj face
 ) {
-	pFace->boundaries = inputFace.boundaries;
+	*pFace = (PlycutFaceIntern){
+		.boundaries = inputFace.boundaries,
+		.bb = {
+			.min = (PixtyV2_F32){.d = {FLT_MAX, FLT_MAX}},
+			.max = (PixtyV2_F32){.d = {-FLT_MAX, -FLT_MAX}}
+		}
+	};
 	pixalcLinAlloc(pRootAlloc, (void **)&pFace->pRoots, pFace->boundaries);
 	for (int32_t i = 0; i < inputFace.boundaries; ++i) {
 		pFace->pRoots[i].size = inputFace.pSizes[i];
@@ -222,6 +236,13 @@ void plycutCornerListInit(
 			plycutClipInitCorner(pFace, i, j, face, pos, cantIntersect);
 		}
 	}
+}
+
+static inline
+bool plycutDoBbOverlap(PlycutBb a, PlycutBb b) {
+	return
+		a.min.d[0] <= b.max.d[0] && a.max.d[0] >= b.min.d[0] &&
+		a.min.d[1] <= b.max.d[1] && a.max.d[1] >= b.min.d[1];
 }
 
 static inline
@@ -276,6 +297,13 @@ PlycutErr plycutClip(
 		&subj,
 		PLYCUT_FACE_SUBJECT
 	);
+	if (!plycutDoBbOverlap(clip.bb, subj.bb)) {
+		//TODO does this make bounds checking in uv-stucco redundant?
+		if (pOverlap) {
+			*pOverlap = false;
+		}
+		return err;
+	}
 	err = plycutClipIntern(pAlloc, pCornerAlc, initSize, &clip, &subj, pOut, pOverlap);
 	PIX_ERR_THROW_IFNOT(err, "", 0);
 	PIX_ERR_CATCH(0, err, ;);

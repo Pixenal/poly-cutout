@@ -39,6 +39,8 @@ typedef PixtyI8Arr I8Arr;
 typedef PlycutFaceRootIntern FaceRootIntern;
 typedef PlycutFaceIntern FaceIntern;
 
+typedef PlycutBb Bb;
+
 typedef enum Label {
 	LABEL_NONE,
 	LABEL_CROSS,
@@ -450,6 +452,47 @@ F32 getColinearAlpha(V2_F32 a, V2_F32 b, V2_F32 c) {
 }
 
 static
+PixErr handleVIntersect(
+	FaceRootIntern *pARoot, Corner *pA,
+	FaceRootIntern *pBRoot, Corner *pB
+) {
+	PixErr err = PIX_ERR_SUCCESS;
+	V2_F32 ab = _(*(V2_F32 *)&pA->pos V2SUB *(V2_F32 *)&pB->pos);
+	F32 len = pixmV2F32Len(ab);
+	if (_(len F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
+		PIX_ERR_RETURN_IFNOT_COND(err, !pA->pLink && !pB->pLink, "degen verts");
+		linkCorners(pARoot, pBRoot, pA, pB);
+	}
+	return err;
+}
+
+static
+PixErr handleVOrTIntersect(
+	PixalcLinAlloc *pAlloc,
+	FaceRootIntern *pARoot, Corner *pA,
+	FaceRootIntern *pBRoot, Corner *pB,
+	F32 *pAlpha
+) {
+	PixErr err = PIX_ERR_SUCCESS;
+	F32 alpha = getColinearAlpha(
+		*(V2_F32 *)&pA->pos, *(V2_F32 *)&pA->pNextOrigin->pos,
+		*(V2_F32 *)&pB->pos
+	);
+	if (!alpha) {
+		//V intersection
+		PIX_ERR_RETURN_IFNOT_COND(err, !pA->pLink && !pB->pLink, "degen verts");
+		linkCorners(pARoot, pBRoot, pA, pB);
+	}
+	else if (alpha > .0f && alpha < 1.0f) {
+		//T intersection on clip edge
+		err = insertT(pAlloc, pARoot, pA, alpha, pBRoot, pB, true);
+		PIX_ERR_RETURN_IFNOT(err, "");
+	}
+	*pAlpha = alpha;
+	return err;
+}
+
+static
 PixErr insertIntersect(
 	PixalcLinAlloc *pAlloc,
 	FaceRootIntern *pClipRoot, FaceRootIntern *pSubjRoot,
@@ -466,9 +509,7 @@ PixErr insertIntersect(
 	I32 resultB = 
 		getIntersectAlpha(pClip->pos, clipPosNext, pSubj->pos, subjPosNext, &aClipEdge);
 	if (resultA || resultB) {
-		if (resultA == 2 && resultB == 2) {
-			*pColinear = true;
-		}
+		*pColinear = resultA == 2 && resultB == 2;
 		return err;
 	}	
 	//alphas are set to 0 or 1 in getIntersectAlpha, if within snap threshold.
@@ -486,59 +527,36 @@ PixErr insertIntersect(
 		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (!aClipEdge && !aSubjEdge) {
-		//V intersection
-		V2_F32 ab = _(*(V2_F32 *)&pClip->pos V2SUB *(V2_F32 *)&pSubj->pos);
-		F32 len = pixmV2F32Len(ab);
-		if (_(len F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
-			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-			linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
-		}
+		err = handleVIntersect(pClipRoot, pClip, pSubjRoot, pSubj);
+		PIX_ERR_RETURN_IFNOT(err, "");
 	}
-	else if (pClip->pNextOrigin->cantIntersect && aClipEdge == 1.0f && !aSubjEdge) {
+	else if (aClipEdge == 1.0f && !aSubjEdge && pClip->pNextOrigin->cantIntersect) {
 		//V intersection on next clip corner
 		// (it won't be tested, so we need to handle this case here)
-		V2_F32 ab = _(*(V2_F32 *)&pClip->pNextOrigin->pos V2SUB *(V2_F32 *)&pSubj->pos);
-		F32 len = pixmV2F32Len(ab);
-		if (_(len F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
-			PIX_ERR_RETURN_IFNOT_COND(
-				err,
-				!pClip->pNextOrigin->pLink && !pSubj->pLink,
-				"degen verts"
-			);
-			linkCorners(pClipRoot, pSubjRoot, pClip->pNextOrigin, pSubj);
-		}
+		err = handleVIntersect(pClipRoot, pClip->pNextOrigin, pSubjRoot, pSubj);
+		PIX_ERR_RETURN_IFNOT(err, "");
 	}
-	else if (!aSubjEdge) {
-		aClipEdge = getColinearAlpha(
-			*(V2_F32 *)&pClip->pos, *(V2_F32 *)&pClip->pNextOrigin->pos,
-			*(V2_F32 *)&pSubj->pos
+	else if (!aSubjEdge){
+		err = handleVOrTIntersect(pAlloc,
+			pClipRoot,
+			pClip,
+			pSubjRoot,
+			pSubj,
+			&aClipEdge
 		);
-		if (!aClipEdge) {
-			//V intersection
-			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-			linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
-		}
-		else if (aClipEdge > .0f && aClipEdge < 1.0f) {
-			//T intersection on clip edge
-			err = insertT(pAlloc, pClipRoot, pClip, aClipEdge, pSubjRoot, pSubj, true);
-			PIX_ERR_RETURN_IFNOT(err, "");
-		}
+		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (!aClipEdge) {
-		aSubjEdge = getColinearAlpha(
-			*(V2_F32 *)&pSubj->pos, *(V2_F32 *)&pSubj->pNextOrigin->pos,
-			*(V2_F32 *)&pClip->pos
+		err = handleVOrTIntersect(
+			pAlloc,
+			pSubjRoot,
+			pSubj,
+			pClipRoot,
+			pClip,
+			&aSubjEdge
 		);
-		if (!aSubjEdge) {
-			//V intersection
-			PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-			linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
-		}
-		else if (aSubjEdge > .0f && aSubjEdge < 1.0f) {
-			//T intersection on subject edge
-			err = insertT(pAlloc, pSubjRoot, pSubj, aSubjEdge, pClipRoot, pClip, true);
-			PIX_ERR_RETURN_IFNOT(err, "");
-		}
+		PIX_ERR_RETURN_IFNOT(err, "");
+
 	}
 	return err;
 }
@@ -603,9 +621,6 @@ PixErr intersectHalfEdges(
 	Corner *pClip, Corner *pSubj
 ) {
 	PixErr err = PIX_ERR_SUCCESS;
-	if (pClip->cantIntersect || pSubj->cantIntersect) {
-		return err;
-	}
 	PIX_ERR_RETURN_IFNOT_COND(
 		err,
 		_(*(V2_F32 *)&pClip->pos V2NOTEQL *(V2_F32 *)&pClip->pNextOrigin->pos) &&
@@ -1435,6 +1450,24 @@ bool wasBoundaryModified(const FaceIter *pIter) {
 	return modified;
 }
 
+static
+Bb cornerBbGet(const Corner *pCorner) {
+	V3_F32 a = pCorner->pos;
+	V3_F32 b = pCorner->pNextOrigin->pos;
+	return (Bb){
+		.min = (V2_F32){.d = {
+			a.d[0] < b.d[0] ? a.d[0] : b.d[0],
+			a.d[1] < b.d[1] ? a.d[1] : b.d[1]
+			}
+		},
+		.max = (V2_F32){.d = {
+			a.d[0] > b.d[0] ? a.d[0] : b.d[0],
+			a.d[1] > b.d[1] ? a.d[1] : b.d[1]
+			}
+		},
+	};
+}
+
 PixErr plycutClipIntern(
 	const PixalcFPtrs *pAlloc,
 	PixalcLinAlloc *pCornerAlloc,
@@ -1448,13 +1481,22 @@ PixErr plycutClipIntern(
 	if (pOverlap) {
 		*pOverlap = false;
 	}
+
 	//find intersections
 	FaceIter clipIter = {0};
 	faceIterInit(pClip, NULL, NULL, NULL, NULL, true, &clipIter);
 	for (; !faceIterSetCorner(&clipIter); faceIterInc(&clipIter)) {
+		Bb clipEdgeBb = cornerBbGet(clipIter.pCorner);
+		if (!plycutDoBbOverlap(clipEdgeBb, pSubj->bb)) {
+			continue;
+		}
 		FaceIter subjIter = {0};
 		faceIterInit(pSubj, NULL, NULL, NULL, NULL, true, &subjIter);
 		for (; !faceIterSetCorner(&subjIter); faceIterInc(&subjIter)) {
+			if (clipIter.pCorner->cantIntersect || subjIter.pCorner->cantIntersect ||
+				!plycutDoBbOverlap(clipEdgeBb, cornerBbGet(subjIter.pCorner))) {
+				continue;
+			}
 			err = intersectHalfEdges(
 				pCornerAlloc,
 				faceIterGetRoot(&clipIter), faceIterGetRoot(&subjIter),
@@ -1564,6 +1606,12 @@ void plycutClipInitCorner(
 	pCorner->face = face;
 	pCorner->pos = pos;
 	pCorner->cantIntersect = cantIntersect;
+
+	Bb *pBb = &pFace->bb;
+	pBb->min.d[0] = pCorner->pos.d[0] < pBb->min.d[0] ? pCorner->pos.d[0] : pBb->min.d[0];
+	pBb->min.d[1] = pCorner->pos.d[1] < pBb->min.d[1] ? pCorner->pos.d[1] : pBb->min.d[1];
+	pBb->max.d[0] = pCorner->pos.d[0] > pBb->max.d[0] ? pCorner->pos.d[0] : pBb->max.d[0];
+	pBb->max.d[1] = pCorner->pos.d[1] > pBb->max.d[1] ? pCorner->pos.d[1] : pBb->max.d[1];
 }
 
 void plycutFaceArrDestroy(const PixalcFPtrs *pAlloc, PlycutFaceArr *pArr) {
