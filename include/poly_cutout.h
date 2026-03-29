@@ -168,14 +168,14 @@ void plycutClipInitCorner(
 );
 
 typedef struct PlycutClipFuncs {
-	PlycutV2_F32 (* getClipPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *);
-	PlycutV3_F32 (* getSubjPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *);
+	PlycutV2_F32 (* getClipPos)(const void *, void *, PlycutInput, int32_t, int32_t, bool *);
+	PlycutV3_F32 (* getSubjPos)(const void *, void *, PlycutInput, int32_t, int32_t, bool *);
 } PlycutClipFuncs;
 
 PLYCUT_FORCE_INLINE
 PlycutV3_F32 plycutCallGetClipPos(
 	const void *pUserData,
-	const void *pMesh,
+	void *pMesh,
 	const PlycutClipFuncs *pFuncs,
 	PlycutInput inputFace,
 	int32_t boundary,
@@ -190,7 +190,7 @@ PlycutV3_F32 plycutCallGetClipPos(
 PLYCUT_FORCE_INLINE
 PlycutV3_F32 plycutCallGetSubjPos(
 	const void *pUserData,
-	const void *pMesh,
+	void *pMesh,
 	const PlycutClipFuncs *pFuncs,
 	PlycutInput inputFace,
 	int32_t boundary,
@@ -206,8 +206,16 @@ void plycutCornerListInit(
 	PixalcLinAlloc *pRootAlloc,
 	PixalcLinAlloc *pCornerAlloc,
 	const void *pUserData,
-	const void *pMesh, PlycutInput inputFace,
-	PlycutV3_F32 (* getPos)(const void *, const void *, const PlycutClipFuncs *, PlycutInput, int32_t, int32_t, bool *),
+	void *pMesh, PlycutInput inputFace,
+	PlycutV3_F32 (* getPos)(
+		const void *,
+		void *,
+		const PlycutClipFuncs *,
+		PlycutInput,
+		int32_t,
+		int32_t,
+		bool *
+		),
 	const PlycutClipFuncs *pFuncs,
 	PlycutFaceIntern *pFace,
 	PlycutClipOrSubj face
@@ -249,10 +257,24 @@ static inline
 PlycutErr plycutClip(
 	const PlycutAlloc *pAlloc,
 	const void *pUserData,
-	const void *pClipMesh, PlycutInput clipInput,
-	PlycutV2_F32 (* clipGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *),
-	const void *pSubjMesh, PlycutInput subjInput,
-	PlycutV3_F32 (* subjGetPos)(const void *, const void *, PlycutInput, int32_t, int32_t, bool *),
+	void *pClipMesh, PlycutInput clipInput,
+	PlycutV2_F32 (* clipGetPos)(
+		const void *,
+		void *,
+		PlycutInput,
+		int32_t,
+		int32_t,
+		bool *
+	),
+	void *pSubjMesh, PlycutInput subjInput,
+	PlycutV3_F32 (* subjGetPos)(
+		const void *,
+		void *,
+		PlycutInput,
+		int32_t,
+		int32_t,
+		bool *
+	),
 	PlycutFaceArr *pOut,
 	bool *pOverlap,
 	PlycutMem *pLinAlc //will reuse existing mem if this isn't null
