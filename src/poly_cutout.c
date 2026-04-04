@@ -71,14 +71,22 @@ typedef struct PlycutCornerIntern {
 	I32 originCorner;
 	I32 boundary;
 	F32 alpha;
+#ifdef _DEBUG
+	U32 userData;
 	Label label;
 	CrossDir travel;
 	PlycutClipOrSubj face;
-	bool checked : 1;
-	bool original : 1;
-	bool cross : 1;
-	bool dontAdd : 1;
-	bool cantIntersect : 1;
+#else
+	U32 userData;
+	U32 label : 4;
+	U32 travel : 2;
+	U32 face : 1;
+#endif
+	U32 checked : 1;
+	U32 original : 1;
+	U32 cross : 1;
+	U32 dontAdd : 1;
+	U32 cantIntersect : 1;
 } PlycutCornerIntern;
 
 typedef PlycutCornerIntern Corner;
@@ -343,6 +351,7 @@ PixErr insertCorner(
 	pNew->original = makeOriginal;
 	pNew->boundary = pRoot->boundary;
 	pNew->originCorner = pCorner->originCorner;
+	pNew->userData = pCorner->userData;
 	++pRoot->size;
 
 	pNew->pNextOrigin = pCorner->pNextOrigin;
@@ -1167,6 +1176,8 @@ void setOutCornerInfo(PlycutCorner *pOut, const Corner *pCorner) {
 	}
 	const Corner *pClip = inClip ? pCorner : pCorner->pLink;
 	const Corner *pSubj = inClip ? pCorner->pLink : pCorner;
+	pOut->userData.clip = pClip->userData;
+	pOut->userData.subj = pSubj->userData;
 	switch (pCorner->label) {
 		case LABEL_CROSS:
 			if (!pClip->original && !pSubj->original) {
@@ -1591,7 +1602,8 @@ void plycutClipInitCorner(
 	I32 corner,
 	PlycutClipOrSubj face,
 	V3_F32 pos,
-	bool cantIntersect
+	bool cantIntersect,
+	U32 userData
 ) {
 	I32 jNext = (corner + 1) % pFace->pRoots[boundary].size;
 	I32 jPrev = corner ? corner - 1 : pFace->pRoots[boundary].size - 1;
@@ -1606,6 +1618,7 @@ void plycutClipInitCorner(
 	pCorner->face = face;
 	pCorner->pos = pos;
 	pCorner->cantIntersect = cantIntersect;
+	pCorner->userData = userData;
 
 	Bb *pBb = &pFace->bb;
 	pBb->min.d[0] = pCorner->pos.d[0] < pBb->min.d[0] ? pCorner->pos.d[0] : pBb->min.d[0];
