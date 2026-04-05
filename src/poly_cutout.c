@@ -1172,6 +1172,12 @@ void setOutCornerInfo(PlycutCorner *pOut, const Corner *pCorner) {
 	if (!pCorner->pLink) {
 		pOut->type = inClip ? PLYCUT_ORIGIN_CLIP : PLYCUT_ORIGIN_SUBJECT;
 		pOut->info.origin.corner = makeClipCornerIdx(pCorner);
+		if (inClip) {
+			pOut->userData.clip = pCorner->userData;
+		}
+		else {
+			pOut->userData.subj = pCorner->userData;
+		}
 		return;
 	}
 	const Corner *pClip = inClip ? pCorner : pCorner->pLink;
