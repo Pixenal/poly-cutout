@@ -20,10 +20,14 @@ https://www.inf.usi.ch/hormann/papers/Greiner.1998.ECO.pdf
 
 #include <pixenals_alloc_utils.h>
 
+#ifdef NDEBUG
 #ifdef WIN32
 #define PLYCUT_FORCE_INLINE __forceinline
 #else
 #define PLYCUT_FORCE_INLINE __attribute__((always_inline)) static inline
+#endif
+#else
+#define PLYCUT_FORCE_INLINE static inline
 #endif
 
 #ifndef PLYCUT_SNAP_THRESHOLD
