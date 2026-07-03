@@ -367,14 +367,21 @@ PixErr insertCorner(
 }
 
 static
-void linkCorners(FaceRootIntern *pARoot, FaceRootIntern *pBRoot, Corner *pA, Corner *pB) {
-	PIX_ERR_ASSERT(
-		"trying to link corners(s) with existing link",
-		!pA->pLink && !pB->pLink
+PixErr linkCorners(FaceRootIntern *pARoot, FaceRootIntern *pBRoot, Corner *pA, Corner *pB) {
+	PixErr err = PIX_ERR_SUCCESS;
+	//TODO this used to be an assert.
+	//it can be hit when a clip poly is both flat against x or y axis,
+	// & colinear with a subj edge. so it was changed to an error.
+	//see crash_a.blend for example
+	PIX_ERR_RETURN_IFNOT_COND(
+		err,
+		!pA->pLink && !pB->pLink,
+		"trying to link corners(s) with existing link"
 	);
 	pA->pLink = pB;
 	pB->pLink = pA;
 	pARoot->modified = pBRoot->modified = true;
+	return err;
 }
 
 static
@@ -388,7 +395,8 @@ PixErr insertT(
 	PIX_ERR_ASSERT("", pEdge->original && pPoint->original);
 	if (testForDegen) {
 		if (_(*(V2_F32 *)&pPoint->pos V2EQL *(V2_F32 *)&pEdge->pos)) {
-			linkCorners(pEdgeRoot, pPointRoot, pEdge, pPoint);
+			err = linkCorners(pEdgeRoot, pPointRoot, pEdge, pPoint);
+			PIX_ERR_RETURN_IFNOT(err, "");
 			return err;
 		}
 	}
@@ -396,7 +404,8 @@ PixErr insertT(
 	pixalcLinAlloc(pAlloc, (void **)&pCopy, 1);
 	*pCopy = *pPoint;
 	pCopy->alpha = aEdge;
-	linkCorners(pEdgeRoot, pPointRoot, pCopy, pPoint);
+	err = linkCorners(pEdgeRoot, pPointRoot, pCopy, pPoint);
+	PIX_ERR_RETURN_IFNOT(err, "");
 	err = insertCorner(pEdgeRoot, pEdge, pCopy, false);
 	PIX_ERR_RETURN_IFNOT(err, "");
 	return err;
@@ -418,7 +427,8 @@ PixErr handleXIntersect(
 	bool onClip = _(*(V2_F32 *)&pos V2EQL *(V2_F32 *)&pClip->pos);
 	bool onSubj = _(*(V2_F32 *)&pos V2EQL *(V2_F32 *)&pSubj->pos);
 	if (onClip && onSubj) {
-		linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
+		err = linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
+		PIX_ERR_RETURN_IFNOT(err, "");
 		return err;
 	}
 	if (onClip) {
@@ -435,7 +445,8 @@ PixErr handleXIntersect(
 	pIntersect[1] = pIntersect[0];
 	pIntersect[0].alpha = aClipEdge;
 	pIntersect[1].alpha = aSubjEdge;
-	linkCorners(pClipRoot, pSubjRoot, pIntersect, pIntersect + 1);
+	err = linkCorners(pClipRoot, pSubjRoot, pIntersect, pIntersect + 1);
+	PIX_ERR_RETURN_IFNOT(err, "");
 	err = insertCorner(pClipRoot, pClip, pIntersect, false);
 	PIX_ERR_RETURN_IFNOT(err, "");
 	err = insertCorner(pSubjRoot, pSubj, pIntersect + 1, false);
@@ -470,7 +481,8 @@ PixErr handleVIntersect(
 	F32 len = pixmV2F32Len(ab);
 	if (_(len F32_LESSEQL PLYCUT_SNAP_THRESHOLD)) {
 		PIX_ERR_RETURN_IFNOT_COND(err, !pA->pLink && !pB->pLink, "degen verts");
-		linkCorners(pARoot, pBRoot, pA, pB);
+		err = linkCorners(pARoot, pBRoot, pA, pB);
+		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	return err;
 }
@@ -490,7 +502,8 @@ PixErr handleVOrTIntersect(
 	if (!alpha) {
 		//V intersection
 		PIX_ERR_RETURN_IFNOT_COND(err, !pA->pLink && !pB->pLink, "degen verts");
-		linkCorners(pARoot, pBRoot, pA, pB);
+		err = linkCorners(pARoot, pBRoot, pA, pB);
+		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	else if (alpha > .0f && alpha < 1.0f) {
 		//T intersection on clip edge
@@ -609,7 +622,8 @@ PixErr insertOverlap(
 	else if (!aClipEdge && !aSubjEdge) {
 		//V overlap
 		PIX_ERR_RETURN_IFNOT_COND(err, !pClip->pLink && !pSubj->pLink, "degen verts");
-		linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
+		err = linkCorners(pClipRoot, pSubjRoot, pClip, pSubj);
+		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	if (pClip->pNextOrigin->cantIntersect && aClipEdge == 1.0f) {
 		//V overlap on next clip corner (it won't be tested, so handle this here)
@@ -618,7 +632,8 @@ PixErr insertOverlap(
 			!pClip->pNextOrigin->pLink && !pSubj->pLink,
 			"degen verts"
 		);
-		linkCorners(pClipRoot, pSubjRoot, pClip->pNextOrigin, pSubj);
+		err = linkCorners(pClipRoot, pSubjRoot, pClip->pNextOrigin, pSubj);
+		PIX_ERR_RETURN_IFNOT(err, "");
 	}
 	return err;
 }
